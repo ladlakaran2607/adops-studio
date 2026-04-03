@@ -1,0 +1,752 @@
+import { useState, useRef } from 'react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Card } from '@/components/ui/card';
+import { Switch } from '@/components/ui/switch';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Upload, Trash2, Plus, Image, Wand2, Crop, Link, Images, Loader2, Video } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
+import { invokeEdgeFunction } from '@/lib/edgeFunctions';
+
+export interface StoryVariant {
+  id: string;
+  url: string;
+  type: 'generative_fill' | 'crop' | 'manual';
+}
+
+export interface CreativeImage {
+  id: string;
+  squareUrl: string;
+  storyVariants: StoryVariant[];
+  selectedStoryId: string;
+}
+
+export interface CreativeVideo {
+  id: string;
+  url: string;
+  thumbnailUrl: string;
+}
+
+export interface CarouselCard {
+  id: string;
+  title: string;
+  url: string;
+  image: CreativeImage;
+}
+
+export interface CreativeData {
+  type: 'SINGLE_IMAGE' | 'SINGLE_VIDEO' | 'CAROUSEL';
+  multiVariant: boolean;
+  singleImage: CreativeImage | null;
+  singleVideo: CreativeVideo | null;
+  carouselCards: CarouselCard[];
+}
+
+function createEmptyImage(): CreativeImage {
+  return {
+    id: crypto.randomUUID(),
+    squareUrl: '',
+    storyVariants: [],
+    selectedStoryId: '',
+  };
+}
+
+function createCarouselCard(index: number): CarouselCard {
+  return {
+    id: crypto.randomUUID(),
+    title: `Card ${index}`,
+    url: '',
+    image: createEmptyImage(),
+  };
+}
+
+function createEmptyVideo(): CreativeVideo {
+  return { id: crypto.randomUUID(), url: '', thumbnailUrl: '' };
+}
+
+export function createEmptyCreativeData(): CreativeData {
+  return {
+    type: 'SINGLE_IMAGE',
+    multiVariant: false,
+    singleImage: null,
+    singleVideo: null,
+    carouselCards: [createCarouselCard(1), createCarouselCard(2)],
+  };
+}
+
+// Build real 9:16 story variants via Cloudinary URL transformations
+// Reference: two processing types — AI Gen Fill (two-step chained) and Face Crop
+function buildCloudinaryStoryVariants(cloudinaryUrl: string): StoryVariant[] {
+  if (!cloudinaryUrl.includes('res.cloudinary.com')) return [];
+  // AI Gen Fill (two chained steps separated by /):
+  //   Step 1: b_gen_fill,c_pad,w_1080,h_1920 — pad to 9:16 with AI-generated background
+  //   Step 2: c_fill,g_auto — auto-gravity fill to ensure subject is well-positioned
+  // Requires Cloudinary AI add-on (paid plan)
+  const genFillUrl = cloudinaryUrl.replace('/upload/', '/upload/b_gen_fill,c_pad,w_1080,h_1920/c_fill,g_auto/');
+  // Face Crop: fills to 9:16 keeping detected face centered (falls back to center crop if no face)
+  const faceCropUrl = cloudinaryUrl.replace('/upload/', '/upload/c_fill,g_face,w_1080,h_1920/');
+  return [
+    { id: crypto.randomUUID(), url: genFillUrl, type: 'generative_fill' },
+    { id: crypto.randomUUID(), url: faceCropUrl, type: 'crop' },
+  ];
+}
+
+// Cloudinary signed upload — signature obtained from cloudinary-sign edge function
+const CLOUDINARY_CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
+const cloudinaryConfigured = Boolean(CLOUDINARY_CLOUD_NAME);
+
+async function uploadToCloudinary(file: File, resourceType: 'image' | 'video' = 'image'): Promise<string> {
+  // Step 1: Get signature from server (API secret never touches the browser)
+  const { signature, timestamp, api_key } = await invokeEdgeFunction<{
+    signature: string;
+    timestamp: number;
+    api_key: string;
+  }>('cloudinary-sign', {});
+
+  // Step 2: Upload to Cloudinary with signed params
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('api_key', api_key);
+  formData.append('timestamp', String(timestamp));
+  formData.append('signature', signature);
+
+  const res = await fetch(
+    `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/${resourceType}/upload`,
+    { method: 'POST', body: formData }
+  );
+
+  if (!res.ok) {
+    const errBody = await res.text();
+    throw new Error(`Cloudinary upload failed (${res.status}): ${errBody}`);
+  }
+
+  const data = await res.json();
+  return data.secure_url;
+}
+
+interface ImageUploadBlockProps {
+  image: CreativeImage;
+  onChange: (updated: CreativeImage) => void;
+  label?: string;
+  multiVariant: boolean;
+}
+
+function ImageUploadBlock({ image, onChange, label, multiVariant }: ImageUploadBlockProps) {
+  const squareRef = useRef<HTMLInputElement>(null);
+  const storyRef = useRef<HTMLInputElement>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [squareUrlValue, setSquareUrlValue] = useState('');
+  const [storyUrlValue, setStoryUrlValue] = useState('');
+
+  const handleSquareUrlSet = () => {
+    const url = squareUrlValue.trim();
+    if (!url) return;
+    if (!url.startsWith('https://')) {
+      toast.error('Please enter a valid HTTPS URL');
+      return;
+    }
+    onChange({
+      ...image,
+      squareUrl: url,
+      storyVariants: image.storyVariants,
+      selectedStoryId: image.selectedStoryId,
+    });
+  };
+
+  const handleStoryUrlSet = () => {
+    const url = storyUrlValue.trim();
+    if (!url) return;
+    if (!url.startsWith('https://')) {
+      toast.error('Please enter a valid HTTPS URL');
+      return;
+    }
+    const manualVariant: StoryVariant = { id: crypto.randomUUID(), url, type: 'manual' };
+    onChange({
+      ...image,
+      storyVariants: [...image.storyVariants.filter(v => v.type !== 'manual' || v.url !== url), manualVariant],
+      selectedStoryId: manualVariant.id,
+    });
+    toast.success('Story image URL applied');
+  };
+
+  const handleSquareUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const blobUrl = URL.createObjectURL(file);
+    onChange({
+      ...image,
+      squareUrl: blobUrl,
+      storyVariants: [],
+      selectedStoryId: '',
+    });
+
+    if (cloudinaryConfigured) {
+      setIsUploading(true);
+      try {
+        const cloudinaryUrl = await uploadToCloudinary(file);
+        const variants = buildCloudinaryStoryVariants(cloudinaryUrl);
+        onChange({
+          ...image,
+          squareUrl: cloudinaryUrl,
+          storyVariants: variants,
+          selectedStoryId: variants[0]?.id || '',
+        });
+        toast.success('Image uploaded to Cloudinary');
+      } catch (err) {
+        console.error('[Cloudinary Upload Error]', err);
+        toast.error(`Cloudinary upload failed: ${(err as Error).message}`);
+      } finally {
+        setIsUploading(false);
+      }
+    }
+  };
+
+  const handleStoryUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const manualVariant: StoryVariant = { id: crypto.randomUUID(), url, type: 'manual' };
+    onChange({
+      ...image,
+      storyVariants: [...image.storyVariants, manualVariant],
+      selectedStoryId: manualVariant.id,
+    });
+  };
+
+  const removeSquare = () => {
+    onChange({ ...image, squareUrl: '', storyVariants: [], selectedStoryId: '' });
+    setSquareUrlValue('');
+    setStoryUrlValue('');
+  };
+
+  return (
+    <div className="space-y-3">
+      {label && <Label className="text-xs text-muted-foreground font-medium">{label}</Label>}
+
+      <Tabs defaultValue="upload" className="w-full">
+        <TabsList className="h-8">
+          <TabsTrigger value="upload" className="text-xs px-3 h-7">
+            <Upload className="w-3 h-3 mr-1.5" />Upload
+          </TabsTrigger>
+          <TabsTrigger value="url" className="text-xs px-3 h-7">
+            <Link className="w-3 h-3 mr-1.5" />URL
+          </TabsTrigger>
+        </TabsList>
+
+        {/* ── Upload Tab ── */}
+        <TabsContent value="upload" className="mt-3">
+          <div className="flex gap-4 items-start">
+            <div className="space-y-1.5">
+              <span className="text-xs text-muted-foreground">Square (1080×1080)</span>
+              {image.squareUrl ? (
+                <div className="relative group">
+                  <img src={image.squareUrl} alt="Square" className="w-36 h-36 object-cover rounded-lg border border-border" />
+                  {isUploading && (
+                    <div className="absolute inset-0 bg-background/60 rounded-lg flex items-center justify-center">
+                      <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                    </div>
+                  )}
+                  <button
+                    onClick={removeSquare}
+                    className="absolute top-1 right-1 bg-destructive text-destructive-foreground rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              ) : (
+                <div
+                  onClick={() => squareRef.current?.click()}
+                  className="w-36 h-36 border-2 border-dashed border-border rounded-lg flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-primary/50 transition-colors"
+                >
+                  <Upload className="w-5 h-5 text-muted-foreground" />
+                  <span className="text-xs text-primary font-medium">Upload Image</span>
+                </div>
+              )}
+              <input ref={squareRef} type="file" accept="image/*" className="hidden" onChange={handleSquareUpload} />
+            </div>
+
+            {/* Story Variants — only shown in multi-variant mode */}
+            {multiVariant && image.squareUrl && (
+              <div className="space-y-1.5">
+                <span className="text-xs text-muted-foreground">Story variant (1080×1920)</span>
+                <div className="flex gap-2">
+                  {image.storyVariants.map((v) => (
+                    <div
+                      key={v.id}
+                      onClick={() => onChange({ ...image, selectedStoryId: v.id })}
+                      className={cn(
+                        "w-[72px] h-[128px] rounded-lg border-2 cursor-pointer overflow-hidden transition-all relative",
+                        v.id === image.selectedStoryId ? "border-primary ring-2 ring-primary/30" : "border-border hover:border-primary/40"
+                      )}
+                    >
+                      <img src={v.url} alt="Story" className="w-full h-full object-cover" />
+                      <div className="absolute bottom-0 inset-x-0 bg-background/80 text-[9px] text-center py-0.5 font-medium text-foreground">
+                        {v.type === 'generative_fill' && <><Wand2 className="w-2.5 h-2.5 inline mr-0.5" />AI Fill</>}
+                        {v.type === 'crop' && <><Crop className="w-2.5 h-2.5 inline mr-0.5" />Crop</>}
+                        {v.type === 'manual' && <><Image className="w-2.5 h-2.5 inline mr-0.5" />Manual</>}
+                      </div>
+                    </div>
+                  ))}
+                  <div
+                    onClick={() => storyRef.current?.click()}
+                    className="w-[72px] h-[128px] border-2 border-dashed border-border rounded-lg flex flex-col items-center justify-center gap-1 cursor-pointer hover:border-primary/50 transition-colors"
+                  >
+                    <Plus className="w-4 h-4 text-muted-foreground" />
+                    <span className="text-[9px] text-primary font-medium text-center leading-tight">Upload Story</span>
+                  </div>
+                  <input ref={storyRef} type="file" accept="image/*" className="hidden" onChange={handleStoryUpload} />
+                </div>
+              </div>
+            )}
+          </div>
+        </TabsContent>
+
+        {/* ── URL Tab ── */}
+        <TabsContent value="url" className="mt-3">
+          <div className="space-y-3">
+            {image.squareUrl && (
+              <div className="flex items-center gap-2 mb-2">
+                <img src={image.squareUrl} alt="Preview" className="w-10 h-10 object-cover rounded border border-border" />
+                <span className="text-xs text-muted-foreground truncate flex-1">{image.squareUrl}</span>
+                <button onClick={removeSquare} className="text-destructive hover:text-destructive/80">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+            <div>
+              <Label className="text-xs text-muted-foreground">1:1 Image URL (1080×1080)</Label>
+              <Input
+                value={squareUrlValue}
+                onChange={e => setSquareUrlValue(e.target.value)}
+                placeholder="https://res.cloudinary.com/..."
+                className="h-8 text-xs mt-1"
+                onKeyDown={e => e.key === 'Enter' && handleSquareUrlSet()}
+                onBlur={handleSquareUrlSet}
+              />
+            </div>
+            {multiVariant && (
+              <div>
+                <Label className="text-xs text-muted-foreground">9:16 Story Image URL (1080×1920) <span className="text-destructive">*</span></Label>
+                <Input
+                  value={storyUrlValue}
+                  onChange={e => setStoryUrlValue(e.target.value)}
+                  placeholder="https://res.cloudinary.com/..."
+                  className="h-8 text-xs mt-1"
+                  onKeyDown={e => e.key === 'Enter' && handleStoryUrlSet()}
+                  onBlur={handleStoryUrlSet}
+                />
+                <p className="text-[10px] text-muted-foreground mt-1">
+                  Required for multi-variant. Enables placement-optimized delivery (feed vs story).
+                </p>
+              </div>
+            )}
+          </div>
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+// ── Video Upload Block ──
+interface VideoUploadBlockProps {
+  video: CreativeVideo;
+  onChange: (updated: CreativeVideo) => void;
+}
+
+function VideoUploadBlock({ video, onChange }: VideoUploadBlockProps) {
+  const videoRef = useRef<HTMLInputElement>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [videoUrlValue, setVideoUrlValue] = useState('');
+  const [thumbUrlValue, setThumbUrlValue] = useState('');
+
+  const handleVideoUrlSet = () => {
+    const url = videoUrlValue.trim();
+    if (!url) return;
+    if (!url.startsWith('https://')) {
+      toast.error('Please enter a valid HTTPS URL');
+      return;
+    }
+    onChange({ ...video, url });
+  };
+
+  const handleThumbUrlSet = () => {
+    const url = thumbUrlValue.trim();
+    if (!url) return;
+    if (!url.startsWith('https://')) {
+      toast.error('Please enter a valid HTTPS URL');
+      return;
+    }
+    onChange({ ...video, thumbnailUrl: url });
+  };
+
+  const handleVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const blobUrl = URL.createObjectURL(file);
+    onChange({ ...video, url: blobUrl });
+
+    if (cloudinaryConfigured) {
+      setIsUploading(true);
+      try {
+        const cloudinaryUrl = await uploadToCloudinary(file, 'video');
+        onChange({ ...video, url: cloudinaryUrl });
+        toast.success('Video uploaded to Cloudinary');
+      } catch (err) {
+        console.error('[Cloudinary Video Upload Error]', err);
+        toast.error(`Video upload failed: ${(err as Error).message}`);
+      } finally {
+        setIsUploading(false);
+      }
+    }
+  };
+
+  const removeVideo = () => {
+    onChange({ ...video, url: '', thumbnailUrl: '' });
+    setVideoUrlValue('');
+    setThumbUrlValue('');
+  };
+
+  return (
+    <div className="space-y-3">
+      <Tabs defaultValue="upload" className="w-full">
+        <TabsList className="h-8">
+          <TabsTrigger value="upload" className="text-xs px-3 h-7">
+            <Upload className="w-3 h-3 mr-1.5" />Upload
+          </TabsTrigger>
+          <TabsTrigger value="url" className="text-xs px-3 h-7">
+            <Link className="w-3 h-3 mr-1.5" />URL
+          </TabsTrigger>
+        </TabsList>
+
+        {/* ── Upload Tab ── */}
+        <TabsContent value="upload" className="mt-3">
+          <div className="space-y-3">
+            {video.url ? (
+              <div className="relative group">
+                <video src={video.url} controls className="w-64 max-h-48 rounded-lg border border-border object-contain bg-black" />
+                {isUploading && (
+                  <div className="absolute inset-0 bg-background/60 rounded-lg flex items-center justify-center">
+                    <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                  </div>
+                )}
+                <button
+                  onClick={removeVideo}
+                  className="absolute top-1 right-1 bg-destructive text-destructive-foreground rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            ) : (
+              <div
+                onClick={() => videoRef.current?.click()}
+                className="w-64 h-36 border-2 border-dashed border-border rounded-lg flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-primary/50 transition-colors"
+              >
+                <Video className="w-5 h-5 text-muted-foreground" />
+                <span className="text-xs text-primary font-medium">Upload Video</span>
+              </div>
+            )}
+            <input ref={videoRef} type="file" accept="video/*" className="hidden" onChange={handleVideoUpload} />
+          </div>
+        </TabsContent>
+
+        {/* ── URL Tab ── */}
+        <TabsContent value="url" className="mt-3">
+          <div className="space-y-3">
+            {video.url && (
+              <div className="flex items-center gap-2 mb-2">
+                <Video className="w-4 h-4 text-muted-foreground shrink-0" />
+                <span className="text-xs text-muted-foreground truncate flex-1">{video.url}</span>
+                <button onClick={removeVideo} className="text-destructive hover:text-destructive/80">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+            <div>
+              <Label className="text-xs text-muted-foreground">Video URL</Label>
+              <Input
+                value={videoUrlValue}
+                onChange={e => setVideoUrlValue(e.target.value)}
+                placeholder="https://res.cloudinary.com/..."
+                className="h-8 text-xs mt-1"
+                onKeyDown={e => e.key === 'Enter' && handleVideoUrlSet()}
+                onBlur={handleVideoUrlSet}
+              />
+            </div>
+          </div>
+        </TabsContent>
+      </Tabs>
+
+      {/* Thumbnail — always visible when video is set */}
+      <div>
+        <Label className="text-xs text-muted-foreground">Thumbnail Image URL (required by Meta)</Label>
+        <Input
+          value={thumbUrlValue}
+          onChange={e => setThumbUrlValue(e.target.value)}
+          placeholder="https://res.cloudinary.com/..."
+          className="h-8 text-xs mt-1"
+          onKeyDown={e => e.key === 'Enter' && handleThumbUrlSet()}
+          onBlur={handleThumbUrlSet}
+        />
+        {video.thumbnailUrl && (
+          <img src={video.thumbnailUrl} alt="Thumbnail" className="w-20 h-20 object-cover rounded border border-border mt-2" />
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface CreativeSectionProps {
+  data: CreativeData;
+  onChange: (data: CreativeData) => void;
+}
+
+export function CreativeSection({ data, onChange }: CreativeSectionProps) {
+  const bulkRef = useRef<HTMLInputElement>(null);
+  const [multiVariant, setMultiVariant] = useState(data.multiVariant ?? false);
+  const [isBulkUploading, setIsBulkUploading] = useState(false);
+
+  const updateMultiVariant = (mv: boolean) => {
+    setMultiVariant(mv);
+    if (!mv) {
+      // Clear story data when multi-variant is turned OFF
+      const updated = { ...data, multiVariant: mv };
+      if (updated.singleImage) {
+        updated.singleImage = { ...updated.singleImage, storyVariants: [], selectedStoryId: '' };
+      }
+      if (updated.carouselCards) {
+        updated.carouselCards = updated.carouselCards.map(c => ({
+          ...c,
+          image: { ...c.image, storyVariants: [], selectedStoryId: '' },
+        }));
+      }
+      onChange(updated);
+    } else {
+      onChange({ ...data, multiVariant: mv });
+    }
+  };
+
+  const updateType = (type: 'SINGLE_IMAGE' | 'SINGLE_VIDEO' | 'CAROUSEL') => {
+    onChange({ ...data, type });
+  };
+
+  const updateSingleImage = (image: CreativeImage) => {
+    onChange({ ...data, singleImage: image });
+  };
+
+  const updateSingleVideo = (video: CreativeVideo) => {
+    onChange({ ...data, singleVideo: video });
+  };
+
+  const updateCard = (cardId: string, updates: Partial<CarouselCard>) => {
+    onChange({
+      ...data,
+      carouselCards: data.carouselCards.map(c => c.id === cardId ? { ...c, ...updates } : c),
+    });
+  };
+
+  const addCard = () => {
+    onChange({
+      ...data,
+      carouselCards: [...data.carouselCards, createCarouselCard(data.carouselCards.length + 1)],
+    });
+  };
+
+  const removeCard = (cardId: string) => {
+    onChange({
+      ...data,
+      carouselCards: data.carouselCards.filter(c => c.id !== cardId),
+    });
+  };
+
+  const handleBulkUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    e.target.value = '';
+
+    if (cloudinaryConfigured) {
+      setIsBulkUploading(true);
+      toast.info(`Uploading ${files.length} image(s) to Cloudinary...`);
+      try {
+        const results = await Promise.allSettled(
+          files.map(file => uploadToCloudinary(file))
+        );
+
+        const newCards: CarouselCard[] = [];
+        let failCount = 0;
+        results.forEach((result, i) => {
+          if (result.status === 'fulfilled') {
+            const cloudinaryUrl = result.value;
+            const variants = buildCloudinaryStoryVariants(cloudinaryUrl);
+            newCards.push({
+              id: crypto.randomUUID(),
+              title: files[i].name.replace(/\.[^/.]+$/, ''),
+              url: '',
+              image: {
+                id: crypto.randomUUID(),
+                squareUrl: cloudinaryUrl,
+                storyVariants: variants,
+                selectedStoryId: variants[0]?.id || '',
+              },
+            });
+          } else {
+            failCount++;
+          }
+        });
+
+        onChange({
+          ...data,
+          carouselCards: [...data.carouselCards.filter(c => c.image.squareUrl), ...newCards],
+        });
+
+        if (failCount > 0) toast.error(`${failCount} image(s) failed to upload`);
+        if (newCards.length > 0) toast.success(`${newCards.length} image(s) uploaded`);
+      } catch (err) {
+        toast.error('Bulk upload failed');
+        console.error('[Bulk Upload Error]', err);
+      } finally {
+        setIsBulkUploading(false);
+      }
+    } else {
+      // Fallback: blob URLs when Cloudinary is not configured
+      const newCards: CarouselCard[] = files.map((file) => ({
+        id: crypto.randomUUID(),
+        title: file.name.replace(/\.[^/.]+$/, ''),
+        url: '',
+        image: {
+          id: crypto.randomUUID(),
+          squareUrl: URL.createObjectURL(file),
+          storyVariants: [],
+          selectedStoryId: '',
+        },
+      }));
+
+      onChange({
+        ...data,
+        carouselCards: [...data.carouselCards.filter(c => c.image.squareUrl), ...newCards],
+      });
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <Label className="text-sm font-medium">Creative</Label>
+        <div className="flex items-center gap-2">
+          <Switch
+            id="multivariant-toggle"
+            checked={multiVariant}
+            onCheckedChange={updateMultiVariant}
+          />
+          <Label htmlFor="multivariant-toggle" className="text-xs text-muted-foreground cursor-pointer">
+            Multi-Variant
+          </Label>
+          {multiVariant && (
+            <span className="text-[10px] text-green-600 bg-green-50 px-1.5 py-0.5 rounded">9:16 enabled</span>
+          )}
+        </div>
+      </div>
+
+      {/* Type Toggle */}
+      <div className="flex gap-1">
+        <Button
+          variant={data.type === 'SINGLE_IMAGE' ? 'default' : 'outline'}
+          size="sm"
+          onClick={() => updateType('SINGLE_IMAGE')}
+        >
+          SINGLE IMAGE
+        </Button>
+        <Button
+          variant={data.type === 'SINGLE_VIDEO' ? 'default' : 'outline'}
+          size="sm"
+          onClick={() => updateType('SINGLE_VIDEO')}
+        >
+          SINGLE VIDEO
+        </Button>
+        <Button
+          variant={data.type === 'CAROUSEL' ? 'default' : 'outline'}
+          size="sm"
+          onClick={() => updateType('CAROUSEL')}
+        >
+          CAROUSEL
+        </Button>
+      </div>
+
+      {/* Single Image */}
+      {data.type === 'SINGLE_IMAGE' && (
+        <ImageUploadBlock
+          image={data.singleImage || createEmptyImage()}
+          onChange={updateSingleImage}
+          multiVariant={multiVariant}
+        />
+      )}
+
+      {/* Single Video */}
+      {data.type === 'SINGLE_VIDEO' && (
+        <VideoUploadBlock
+          video={data.singleVideo || createEmptyVideo()}
+          onChange={updateSingleVideo}
+        />
+      )}
+
+      {/* Carousel */}
+      {data.type === 'CAROUSEL' && (
+        <div className="space-y-3">
+          {data.carouselCards.map((card, i) => (
+            <Card key={card.id} className="border-border/50 bg-muted/20">
+              <div className="p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-primary">Card {i + 1}</span>
+                  <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:text-destructive" onClick={() => removeCard(card.id)}>
+                    <Trash2 className="w-3 h-3" />
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Card Title</Label>
+                    <Input
+                      value={card.title}
+                      onChange={e => updateCard(card.id, { title: e.target.value })}
+                      placeholder="Card title"
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-muted-foreground flex items-center gap-1"><Link className="w-3 h-3" /> URL</Label>
+                    <Input
+                      value={card.url}
+                      onChange={e => updateCard(card.id, { url: e.target.value })}
+                      placeholder="https://..."
+                      className="mt-1"
+                    />
+                  </div>
+                </div>
+
+                <ImageUploadBlock
+                  image={card.image}
+                  onChange={(img) => updateCard(card.id, { image: img })}
+                  multiVariant={multiVariant}
+                />
+              </div>
+            </Card>
+          ))}
+
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={addCard} className="border-primary/30 text-primary hover:bg-primary/10">
+              <Plus className="w-3.5 h-3.5 mr-1" /> Add Card
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => bulkRef.current?.click()} disabled={isBulkUploading} className="border-primary/30 text-primary hover:bg-primary/10">
+              {isBulkUploading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Images className="w-3.5 h-3.5 mr-1" />}
+              {isBulkUploading ? 'Uploading...' : 'Bulk Upload Visuals'}
+            </Button>
+            <input ref={bulkRef} type="file" accept="image/*" multiple className="hidden" onChange={handleBulkUpload} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
