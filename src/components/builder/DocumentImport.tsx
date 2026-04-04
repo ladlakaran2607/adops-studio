@@ -1,6 +1,5 @@
 import { useState, useRef } from 'react';
 import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea';
 import { FileUp, FileText, Loader2, Check, AlertCircle } from 'lucide-react';
 import mammoth from 'mammoth';
 
@@ -168,14 +167,14 @@ export function DocumentImport({ onImport }: DocumentImportProps) {
         }}
       />
 
-      <div className="grid grid-cols-[1fr_1fr] gap-4">
+      <div className="h-full flex flex-col">
         {/* Upload zone - compact */}
         {status === 'idle' && (
           <div
             onDragOver={e => e.preventDefault()}
             onDrop={handleDrop}
             onClick={() => fileRef.current?.click()}
-            className="border-2 border-dashed border-primary/30 rounded-lg p-4 text-center cursor-pointer hover:border-primary/60 hover:bg-primary/5 transition-colors flex flex-col items-center justify-center"
+            className="border-2 border-dashed border-primary/30 rounded-lg p-4 text-center cursor-pointer hover:border-primary/60 hover:bg-primary/5 transition-colors flex flex-col items-center justify-center h-full min-h-[200px]"
           >
             <FileUp className="w-5 h-5 text-primary/60 mb-1.5" />
             <p className="text-sm font-medium text-foreground">Upload .docx</p>
@@ -226,17 +225,6 @@ export function DocumentImport({ onImport }: DocumentImportProps) {
             </div>
           </div>
         )}
-
-        {/* Extra context tekstvak */}
-        <div className="space-y-1.5">
-          <label className="text-xs font-medium text-foreground">Additional instructions for the system</label>
-          <Textarea
-            placeholder={"Provide extra context so the system can better interpret your document.\n\nFor example:\n• \"Headlines are in the first column, body texts in the second\"\n• \"Ignore the first table, it's a summary\"\n• \"Each campaign has 2 audiences: broad and retargeting\""}
-            rows={6}
-            className="text-xs resize-none"
-          />
-          <p className="text-[10px] text-muted-foreground/70">This helps the system interpret your document more accurately.</p>
-        </div>
       </div>
 
     </div>

@@ -3,7 +3,8 @@
 > Status legend: PASS (browser) / PASS (code) / FAIL / BLOCKED / SKIP / (empty = not tested)
 > PASS (browser) = verified in browser with network + DB checks
 > PASS (code) = verified by reading source code, not yet browser-tested
-> Last browser-tested: 2026-04-03 — Sections 4, 8-9 re-verified on shared DB (mgymatqmuspzkxaqnyrp)
+> Last browser-tested: 2026-04-04 — Sections 10-11 re-verified (Cloudinary upload + AI Gen Fill story variants)
+> Previous: 2026-04-03 — Sections 4, 8-9 re-verified on shared DB (mgymatqmuspzkxaqnyrp)
 > Previous: 2026-03-28 — Sections 4-9 (Templates + Builder UI), 15-20 (Campaign Launch + Validation)
 
 ---
@@ -158,10 +159,10 @@
 | 10.2 | `CLOUDINARY_API_KEY` and `CLOUDINARY_API_SECRET` set as Supabase secrets | PASS (browser) | |
 | 10.3 | `VITE_CLOUDINARY_CLOUD_NAME` set in `.env` (`dhaqo2jjl`) | PASS (browser) | |
 | 10.4 | Image upload: file → blob preview → Cloudinary signed upload → HTTPS URL replaces blob | PASS (browser) | |
-| 10.5 | Video upload: file → blob preview → Cloudinary signed upload → HTTPS URL replaces blob | PASS (code) | VideoUploadBlock calls uploadToCloudinary(file, 'video') |
+| 10.5 | Video upload: file → blob preview → Cloudinary signed upload → HTTPS URL replaces blob | PASS (browser) | Re-verified 2026-04-04 |
 | 10.6 | Signed upload: `cloudinary-sign` returns `{ signature, timestamp, api_key }` | PASS (browser) | SHA-1 of `timestamp={ts}+secret` |
-| 10.7 | Upload failure → error toast, blob URL remains (cannot be sent to Meta) | PASS (code) | catch block shows toast.error, blob URL stays as-is |
-| 10.8 | Cloudinary not configured (no cloud name) → upload creates blob URL only, no Cloudinary call | PASS (code) | `if (cloudinaryConfigured)` guard — skips Cloudinary when false |
+| 10.7 | Upload failure → error toast, blob URL remains (cannot be sent to Meta) | PASS (browser) | Re-verified 2026-04-04 |
+| 10.8 | Cloudinary not configured (no cloud name) → upload creates blob URL only, no Cloudinary call | PASS (browser) | Re-verified 2026-04-04 |
 
 ---
 
@@ -175,9 +176,9 @@
 | 11.4 | AI Fill variant displays correctly in thumbnail (requires Cloudinary AI add-on, paid plan) | PASS (browser) | |
 | 11.5 | Face Crop variant displays correctly in thumbnail (works on all plans) | PASS (browser) | |
 | 11.6 | First variant (AI Fill) auto-selected as `selectedStoryId` | PASS (browser) | |
-| 11.7 | Click different variant thumbnail → switches `selectedStoryId` | PASS (code) | onClick sets selectedStoryId to variant's id |
-| 11.8 | Non-Cloudinary URLs (pasted HTTPS) → no automatic variants generated | PASS (code) | `buildCloudinaryStoryVariants()` checks for 'res.cloudinary.com', returns [] |
-| 11.9 | Manual story upload → adds as `type: 'manual'` variant alongside auto-generated ones | PASS (code) | handleStoryUpload creates manual variant, appends to existing array |
+| 11.7 | Click different variant thumbnail → switches `selectedStoryId` | PASS (browser) | Re-verified 2026-04-04 |
+| 11.8 | Non-Cloudinary URLs (pasted HTTPS) → no automatic variants generated | PASS (browser) | Re-verified 2026-04-04 |
+| 11.9 | Manual story upload → adds as `type: 'manual'` variant alongside auto-generated ones | PASS (browser) | Re-verified 2026-04-04 |
 
 ---
 

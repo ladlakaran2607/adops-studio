@@ -110,15 +110,16 @@ export function CampaignTemplateForm({ template, onSave, onCancel }: Props) {
         <CardHeader><CardTitle className="text-base">Special Ad Categories</CardTitle></CardHeader>
         <CardContent>
           <p className="text-xs text-muted-foreground mb-3">Required by Meta — indicate whether your campaign falls under special categories.</p>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-4">
             {specialAdCategoryOptions.map(({ value, label }) => (
-              <div key={value} className="flex items-center gap-2">
+              <div key={value} className="flex items-center gap-3 py-1">
                 <Checkbox
                   checked={value === 'NONE' ? (form.specialAdCategories || []).length === 0 : (form.specialAdCategories || []).includes(value)}
                   onCheckedChange={() => toggleSpecialAdCategory(value)}
                   id={`sac-${value}`}
+                  className="h-5 w-5 rounded-full border-2"
                 />
-                <label htmlFor={`sac-${value}`} className="text-sm cursor-pointer">{label}</label>
+                <label htmlFor={`sac-${value}`} className="text-sm cursor-pointer leading-none">{label}</label>
               </div>
             ))}
           </div>

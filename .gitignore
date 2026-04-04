@@ -19,6 +19,9 @@ dist-ssr
 # MCP config (contains API keys)
 .mcp.json
 
+# Design reference files (Stitch mockups - local only)
+design-reference/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

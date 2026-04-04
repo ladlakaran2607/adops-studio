@@ -6,13 +6,14 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { RefreshCw, Filter, Search, Sparkles, Check, X, ChevronDown, ChevronUp, Pencil } from 'lucide-react';
+import { RefreshCw, Sparkles, Check, X, ChevronDown, ChevronUp, Pencil, Download, CheckCircle2, Undo2, ChevronsUpDown, ChevronsDownUp } from 'lucide-react';
 import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { AccountSelector } from '@/components/shared/AccountSelector';
 import { invokeEdgeFunction } from '@/lib/edgeFunctions';
 import { metaPost } from '@/lib/metaApi';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 
 /**
  * Meta ads can have multiple bodies, titles, and descriptions via asset_feed_spec.
@@ -66,6 +67,8 @@ export default function AdsProcessing() {
   // Track which suggestion text is being edited: key = "adId-field-index"
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
+  // Collapse state for ad cards
+  const [collapsedAds, setCollapsedAds] = useState<Set<string>>(new Set());
 
   const startEditSuggestion = (adId: string, field: string, index: number, currentText: string) => {
     setEditingKey(`${adId}-${field}-${index}`);
@@ -82,6 +85,25 @@ export default function AdsProcessing() {
     setEditingKey(null);
   };
 
+
+  // Revert a single suggestion field back to original
+  const revertSuggestion = (adId: string, field: 'headlines' | 'bodies' | 'descriptions', index: number) => {
+    setAds(prev => prev.map(ad => {
+      if (ad.id !== adId || !ad.aiSuggestion) return ad;
+      const s = JSON.parse(ad.aiSuggestion);
+      // Get the original value and set the suggestion to match it (effectively removing the change)
+      const original = ad[field][index];
+      if (s[field]) {
+        s[field][index] = original;
+      }
+      // Check if ALL suggestions now match originals — if so, clear aiSuggestion entirely
+      const allMatch =
+        (s.headlines || []).every((h: string, i: number) => h === ad.headlines[i]) &&
+        (s.bodies || []).every((b: string, i: number) => b === ad.bodies[i]) &&
+        (s.descriptions || []).every((d: string, i: number) => d === ad.descriptions[i]);
+      return { ...ad, aiSuggestion: allMatch ? null : JSON.stringify(s) };
+    }));
+  };
 
   const matchesAny = (arr: string[], q: string) =>
     arr.some(t => t.toLowerCase().includes(q.toLowerCase()));
@@ -106,6 +128,21 @@ export default function AdsProcessing() {
 
   const selectedAds = filteredAds.filter(a => a.selected);
   const allFilteredSelected = filteredAds.length > 0 && filteredAds.every(a => a.selected);
+
+  // Collapse helpers
+  const toggleAdCollapse = (adId: string) => {
+    setCollapsedAds(prev => {
+      const next = new Set(prev);
+      next.has(adId) ? next.delete(adId) : next.add(adId);
+      return next;
+    });
+  };
+  const collapseAll = () => setCollapsedAds(new Set(filteredAds.map(a => a.id)));
+  const collapseUnselected = () => {
+    const selectedIds = new Set(selectedAds.map(a => a.id));
+    setCollapsedAds(new Set(filteredAds.filter(a => !selectedIds.has(a.id)).map(a => a.id)));
+  };
+  const expandAll = () => setCollapsedAds(new Set());
 
   const toggleSelect = (id: string) => {
     setAds(prev => prev.map(a => a.id === id ? { ...a, selected: !a.selected } : a));
@@ -264,9 +301,6 @@ export default function AdsProcessing() {
 
   const adsWithSuggestions = ads.filter(a => a.aiSuggestion);
 
-  // Count total text variants across all ads
-  const totalTextVariants = (ad: Ad) => ad.headlines.length + ad.bodies.length + ad.descriptions.length;
-
   /** Renders a list of text items with optional AI before/after diff */
   const renderTextList = (
     adId: string,
@@ -276,52 +310,64 @@ export default function AdsProcessing() {
     suggestions: string[] | null,
   ) => {
     if (originals.length === 0 && (!suggestions || suggestions.length === 0)) return null;
+    const singularLabel = label.replace(/s$/, ''); // "Headlines" → "Headline", "Bodies" → "Bodie" → handled below
+    const itemLabel = label === 'Bodies' ? 'Body' : label === 'Headlines' ? 'Headline' : label === 'Descriptions' ? 'Description' : singularLabel;
     return (
-      <div className="space-y-0.5">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{label}{originals.length > 1 ? ` (${originals.length})` : ''}</span>
+      <div className="space-y-3">
+        <span className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">{label}{originals.length > 1 ? ` (${originals.length})` : ''}</span>
         {originals.map((text, i) => {
           const suggested = suggestions?.[i];
           const changed = suggested && suggested !== text;
           const key = `${adId}-${field}-${i}`;
           const isEditing = editingKey === key;
           return (
-            <div key={i} className="text-xs leading-snug">
+            <div key={i} className="space-y-1">
+              {originals.length > 1 && (
+                <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-wider">{itemLabel} {i + 1}</span>
+              )}
               {changed ? (
-                <div className="space-y-0.5">
-                  <div className="line-through text-muted-foreground">{text}</div>
-                  {isEditing ? (
-                    <div className="flex items-center gap-1">
-                      <Input
-                        value={editValue}
-                        onChange={e => setEditValue(e.target.value)}
-                        className="h-6 text-xs py-0 px-1.5"
-                        autoFocus
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') saveEditSuggestion(adId, field, i);
-                          if (e.key === 'Escape') setEditingKey(null);
-                        }}
-                      />
-                      <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-success" onClick={() => saveEditSuggestion(adId, field, i)}>
-                        <Check className="w-3 h-3" />
-                      </Button>
-                      <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-muted-foreground" onClick={() => setEditingKey(null)}>
-                        <X className="w-3 h-3" />
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-1 group/edit">
-                      <div className="text-success font-medium bg-success/10 rounded px-1.5 py-0.5 flex-1">{suggested}</div>
-                      <button
+                isEditing ? (
+                  <div className="flex items-center gap-1">
+                    <Input
+                      value={editValue}
+                      onChange={e => setEditValue(e.target.value)}
+                      className="h-7 text-xs py-0 px-2"
+                      autoFocus
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') saveEditSuggestion(adId, field, i);
+                        if (e.key === 'Escape') setEditingKey(null);
+                      }}
+                    />
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-green-600" onClick={() => saveEditSuggestion(adId, field, i)}>
+                      <Check className="w-3 h-3" />
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground" onClick={() => setEditingKey(null)}>
+                      <X className="w-3 h-3" />
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="bg-accent/30 rounded-xl p-3 border-l-4 border-green-500 group/edit">
+                    <p className="text-sm text-muted-foreground line-through">{text}</p>
+                    <div className="flex items-center justify-between mt-1">
+                      <p
+                        className="text-sm font-bold text-green-700 cursor-pointer flex-1"
                         onClick={() => startEditSuggestion(adId, field, i, suggested!)}
-                        className="opacity-0 group-hover/edit:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
                       >
-                        <Pencil className="w-3 h-3" />
-                      </button>
+                        {suggested}
+                      </p>
+                      <div className="flex items-center gap-1 opacity-0 group-hover/edit:opacity-100 transition-opacity">
+                        <button onClick={() => startEditSuggestion(adId, field, i, suggested!)} className="p-1 hover:bg-background rounded" title="Edit suggestion">
+                          <Pencil className="w-3 h-3 text-muted-foreground" />
+                        </button>
+                        <button onClick={() => revertSuggestion(adId, field, i)} className="p-1 hover:bg-background rounded" title="Revert to original">
+                          <Undo2 className="w-3 h-3 text-amber-600" />
+                        </button>
+                      </div>
                     </div>
-                  )}
-                </div>
+                  </div>
+                )
               ) : (
-                <div className="line-clamp-2">{text}</div>
+                <p className="text-xs leading-snug">{text}</p>
               )}
             </div>
           );
@@ -330,262 +376,263 @@ export default function AdsProcessing() {
     );
   };
 
+  /** Renders text list for already-accepted (modified) ads */
+  const renderModifiedTextList = (
+    label: string,
+    originals: string[],
+  ) => {
+    if (originals.length === 0) return null;
+    const itemLabel = label === 'Bodies' ? 'Body' : label === 'Headlines' ? 'Headline' : label === 'Descriptions' ? 'Description' : label;
+    return (
+      <div className="space-y-2">
+        <span className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">{label}{originals.length > 1 ? ` (${originals.length})` : ''}</span>
+        {originals.map((text, i) => (
+          <div key={i} className="space-y-0.5">
+            {originals.length > 1 && (
+              <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-wider">{itemLabel} {i + 1}</span>
+            )}
+            <p className="text-xs leading-snug">{text}</p>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   return (
     <AppLayout>
-      <div className="p-8 max-w-7xl mx-auto space-y-6">
-        {/* Header */}
+      {/* Sticky Header */}
+      <div className="sticky top-0 z-20 bg-background/80 backdrop-blur-xl border-b border-border/30 px-8 py-5 animate-fade-in">
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-foreground font-display">Ads Processing</h1>
-          {accountId && (
-            <span className="text-sm text-muted-foreground">Account: {accountId}</span>
-          )}
+          <div className="flex items-center gap-4">
+            <h1 className="text-2xl font-bold tracking-tight">Ads Processing</h1>
+            {accountId && (
+              <span className="px-2.5 py-1 rounded-lg bg-muted text-[11px] font-bold text-muted-foreground tracking-wider">{accountId}</span>
+            )}
+          </div>
+          <p className="text-sm text-muted-foreground">AI-powered bulk editing for your Meta ad copy</p>
         </div>
+      </div>
 
-        {/* Account ID + Refresh */}
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex gap-3 items-end">
-              <AccountSelector value={accountId} onChange={setAccountId} className="flex-1" />
-              <Button variant="outline" onClick={handleRefresh} disabled={!accountId || isLoading}>
-                <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
-                Apply
+      <div className={`p-8 max-w-7xl mx-auto space-y-6 ${ads.some(a => a.modified) ? 'pb-24' : ''}`}>
+        {/* Filter Card */}
+        <Card className="animate-fade-in">
+          <CardContent className="pt-6 pb-6">
+            {/* Account selector + Load Ads row */}
+            <div className="flex items-end gap-4 mb-6">
+              <div className="flex-1">
+                <AccountSelector value={accountId} onChange={setAccountId} className="flex-1" />
+              </div>
+              <Button onClick={handleRefresh} disabled={!accountId || isLoading} className="bg-foreground text-background hover:bg-foreground/90 font-bold px-6 rounded-xl h-10">
+                <Download className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
+                Load Ads
               </Button>
             </div>
 
-            {/* Filters */}
-            <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mt-4">
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground flex items-center gap-1">
-                  <Filter className="w-3 h-3 text-primary" /> Filter by headline
-                </Label>
-                <Input
-                  value={headlineFilter}
-                  onChange={e => setHeadlineFilter(e.target.value)}
-                  placeholder="Search in headlines only"
-                  className="text-sm"
-                />
+            {/* Filter inputs row */}
+            <div className="grid grid-cols-12 gap-4">
+              <div className="col-span-3">
+                <Input value={headlineFilter} onChange={e => setHeadlineFilter(e.target.value)} placeholder="Headline contains..." className="bg-muted/50" />
               </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground flex items-center gap-1">
-                  <Filter className="w-3 h-3 text-primary" /> Filter by ad copy
-                </Label>
-                <Input
-                  value={bodyFilter}
-                  onChange={e => setBodyFilter(e.target.value)}
-                  placeholder="Search in ad copy only"
-                  className="text-sm"
-                />
+              <div className="col-span-3">
+                <Input value={bodyFilter} onChange={e => setBodyFilter(e.target.value)} placeholder="Body contains..." className="bg-muted/50" />
               </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Ad Type</Label>
+              <div className="col-span-2">
                 <Select value={adTypeFilter} onValueChange={setAdTypeFilter}>
-                  <SelectTrigger className="text-sm">
-                    <SelectValue />
-                  </SelectTrigger>
+                  <SelectTrigger className="bg-muted/50"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="all">Ad type</SelectItem>
                     <SelectItem value="IMAGE">Image</SelectItem>
                     <SelectItem value="VIDEO">Video</SelectItem>
                     <SelectItem value="CAROUSEL">Carousel</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground flex items-center gap-1">
-                  <Search className="w-3 h-3 text-primary" /> General filter
-                </Label>
-                <Input
-                  value={generalFilter}
-                  onChange={e => setGeneralFilter(e.target.value)}
-                  placeholder="Search in names, headlines..."
-                  className="text-sm"
-                />
+              <div className="col-span-2">
+                <Input value={generalFilter} onChange={e => setGeneralFilter(e.target.value)} placeholder="Search ID" className="bg-muted/50" />
               </div>
-              <div className="flex items-end pb-2">
+              <div className="col-span-2 flex items-center justify-end">
                 <div className="flex items-center gap-2">
-                  <Checkbox
-                    checked={activeOnly}
-                    onCheckedChange={(v) => setActiveOnly(v === true)}
-                    id="active-only"
-                  />
-                  <Label htmlFor="active-only" className="text-sm text-muted-foreground cursor-pointer">
-                    Active ads only
-                  </Label>
+                  <Checkbox checked={activeOnly} onCheckedChange={(v) => setActiveOnly(v === true)} id="active-only" />
+                  <Label htmlFor="active-only" className="text-sm font-medium text-muted-foreground cursor-pointer">Active only</Label>
                 </div>
+              </div>
+            </div>
+
+            {/* Counters */}
+            <div className="mt-6 pt-6 border-t border-border/30 flex items-center gap-6">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Total</span>
+                <span className="bg-muted text-foreground px-2 py-0.5 rounded font-bold text-xs">{ads.length}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Filtered</span>
+                <span className="bg-accent text-primary px-2 py-0.5 rounded font-bold text-xs">{filteredAds.length}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Selected</span>
+                <span className="bg-primary text-primary-foreground px-2 py-0.5 rounded font-bold text-xs">{selectedAds.length}</span>
               </div>
             </div>
           </CardContent>
         </Card>
 
-        {/* Counters */}
-        <div className="flex items-center gap-3">
-          <Badge variant="secondary" className="text-xs">Total: {filteredAds.length}</Badge>
-          <Badge variant="outline" className="text-xs border-primary/30 text-primary">
-            Filtered: {filteredAds.length}
-          </Badge>
-          <Badge className="text-xs bg-accent text-accent-foreground">
-            Selected: {selectedAds.length}
-          </Badge>
-
-          {selectedAds.length > 0 && (
-            <Button
-              size="sm"
-              onClick={() => setShowAiPanel(!showAiPanel)}
-              className="ml-auto"
-            >
-              <Sparkles className="w-4 h-4 mr-1" />
-              AI Bulk Edit
-              {showAiPanel ? <ChevronUp className="w-3 h-3 ml-1" /> : <ChevronDown className="w-3 h-3 ml-1" />}
-            </Button>
-          )}
-        </div>
+        {/* Guidance nudge — shown until ads are loaded */}
+        {ads.length === 0 && !isLoading && (
+          <div className="p-3 bg-accent rounded-lg text-sm text-accent-foreground animate-fade-in">
+            {!accountId
+              ? <>Select an <strong>Ad Account</strong> above, then click <strong>"Load Ads"</strong> to get started.</>
+              : <>Click <strong>"Load Ads"</strong> to fetch your campaigns.</>
+            }
+          </div>
+        )}
 
         {/* AI Bulk Edit Panel */}
-        {showAiPanel && selectedAds.length > 0 && (
-          <Card className="border-primary/20 bg-accent/30">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-primary" />
-                AI Bulk Edit — {selectedAds.length} ads selected ({selectedAds.reduce((sum, a) => sum + totalTextVariants(a), 0)} text variants)
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
+        <Card className={cn(
+          "border-2 border-primary shadow-xl shadow-primary/5 overflow-hidden transition-all duration-300",
+          showAiPanel ? 'opacity-100' : 'opacity-70'
+        )}>
+          <div
+            className="bg-accent px-6 py-4 flex items-center justify-between cursor-pointer"
+            onClick={() => selectedAds.length > 0 && setShowAiPanel(!showAiPanel)}
+          >
+            <div className="flex items-center gap-3">
+              <Sparkles className="w-5 h-5 text-primary" />
+              <h3 className="font-bold text-foreground tracking-tight">
+                AI Bulk Edit {selectedAds.length > 0 && <span className="ml-1 text-muted-foreground font-medium">({selectedAds.length} ads selected)</span>}
+              </h3>
+            </div>
+            <div className="flex items-center gap-2">
+              {selectedAds.length === 0 && <span className="text-xs text-muted-foreground">Select ads to enable</span>}
+              {showAiPanel ? <ChevronUp className="w-4 h-4 text-primary" /> : <ChevronDown className="w-4 h-4 text-primary" />}
+            </div>
+          </div>
+          {showAiPanel && selectedAds.length > 0 && (
+            <div className="p-6 space-y-4 animate-fade-in">
               <Textarea
                 value={aiPrompt}
                 onChange={e => setAiPrompt(e.target.value)}
                 placeholder='Describe what you want to change. E.g.: "Replace spring break with summer break in all texts" or "Make the text shorter and more compelling". All text variants (headlines, bodies, descriptions) will be processed.'
                 rows={3}
               />
-              <div className="flex gap-2">
-                <Button onClick={handleAiProcess} disabled={!aiPrompt.trim() || aiProcessing}>
-                  {aiProcessing ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 mr-1 animate-spin" />
-                      Processing...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="w-4 h-4 mr-1" />
-                      Generate Suggestions
-                    </>
-                  )}
-                </Button>
+              <div className="flex items-center justify-end gap-3">
                 {adsWithSuggestions.length > 0 && (
-                  <Button variant="outline" onClick={acceptAll} className="text-success border-success/30 hover:bg-success/10">
+                  <Button variant="outline" onClick={acceptAll} className="border-primary text-primary font-bold rounded-xl hover:bg-accent">
                     <Check className="w-4 h-4 mr-1" />
                     Accept All ({adsWithSuggestions.length})
                   </Button>
                 )}
+                <Button onClick={handleAiProcess} disabled={!aiPrompt.trim() || aiProcessing} className="bg-primary text-primary-foreground font-bold rounded-xl shadow-lg shadow-primary/20 hover:scale-[1.02] transition-all">
+                  {aiProcessing ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4 mr-2" />
+                      Generate Suggestions
+                    </>
+                  )}
+                </Button>
               </div>
-            </CardContent>
-          </Card>
-        )}
+            </div>
+          )}
+        </Card>
 
-        {/* Push to Meta bar — visible when ads have been modified */}
-        {ads.some(a => a.modified) && (
-          <Card className="border-primary/30 bg-primary/5">
-            <CardContent className="py-3 px-4 flex items-center justify-between">
-              <span className="text-sm text-foreground">
-                <strong>{ads.filter(a => a.modified).length}</strong> ad(s) modified — ready to push to Meta
-              </span>
-              <Button onClick={handlePushToMeta} disabled={isPushing}>
-                {isPushing ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 mr-1 animate-spin" />
-                    Pushing...
-                  </>
-                ) : (
-                  <>
-                    <Check className="w-4 h-4 mr-1" />
-                    Push to Meta
-                  </>
-                )}
+        {/* Ads List */}
+        <div className="space-y-3">
+          {/* Select all header + collapse controls */}
+          <div className="flex items-center justify-between px-4 py-2.5 bg-muted/50 rounded-lg">
+            <div className="flex items-center gap-3">
+              <Checkbox checked={allFilteredSelected} onCheckedChange={toggleSelectAll} className="h-5 w-5" />
+              <span className="text-xs font-medium text-muted-foreground">Select all</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <Button variant="ghost" size="sm" onClick={collapseUnselected} className="text-[11px] text-muted-foreground h-7 px-2">
+                <ChevronsDownUp className="w-3.5 h-3.5 mr-1" /> Collapse unselected
               </Button>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Ads List — card-based to handle multi-text well */}
-        <div className="space-y-2">
-          {/* Select all header */}
-          <div className="flex items-center gap-3 px-4 py-2 bg-muted/50 rounded-lg">
-            <Checkbox checked={allFilteredSelected} onCheckedChange={toggleSelectAll} />
-            <span className="text-xs font-medium text-muted-foreground w-[160px] shrink-0">Ad Name</span>
-            <span className="text-xs text-muted-foreground flex-[2]">Headlines / Bodies / Descriptions</span>
-            <span className="text-xs text-muted-foreground w-16 shrink-0 text-center">Type</span>
-            <span className="text-xs text-muted-foreground w-16 shrink-0 text-center">Status</span>
-            <span className="w-16 shrink-0" />
+              <Button variant="ghost" size="sm" onClick={collapseAll} className="text-[11px] text-muted-foreground h-7 px-2">
+                <ChevronsDownUp className="w-3.5 h-3.5 mr-1" /> Collapse all
+              </Button>
+              <Button variant="ghost" size="sm" onClick={expandAll} className="text-[11px] text-muted-foreground h-7 px-2">
+                <ChevronsUpDown className="w-3.5 h-3.5 mr-1" /> Expand all
+              </Button>
+            </div>
           </div>
 
           {filteredAds.length === 0 ? (
             <Card>
               <CardContent className="py-12 text-center text-muted-foreground">
-                {isLoading ? 'Loading ads...' : 'No ads found. Select your Ad Account and click Apply.'}
+                {isLoading ? 'Loading ads...' : 'No ads found. Select your Ad Account and click Load Ads.'}
               </CardContent>
             </Card>
           ) : (
             filteredAds.map(ad => {
               const suggestion = ad.aiSuggestion ? JSON.parse(ad.aiSuggestion) : null;
               return (
-                <Card key={ad.id} className={`transition-colors ${ad.selected ? 'border-primary/30 bg-accent/10' : ''}`}>
-                  <CardContent className="py-3 px-4">
-                    <div className="flex items-start gap-3">
-                      {/* Checkbox */}
-                      <div className="pt-0.5">
-                        <Checkbox checked={ad.selected} onCheckedChange={() => toggleSelect(ad.id)} />
+                <Card key={ad.id} className={cn(
+                  "transition-all duration-200 animate-fade-in",
+                  ad.selected && 'border-primary/30 bg-accent/10',
+                  suggestion && 'ring-1 ring-primary/20'
+                )}>
+                  <CardContent className="py-5 px-6">
+                    {/* Header row: checkbox + name + badges + actions + collapse */}
+                    <div className="flex items-start gap-4">
+                      <div className="pt-1">
+                        <Checkbox checked={ad.selected} onCheckedChange={() => toggleSelect(ad.id)} className="h-5 w-5" />
                       </div>
 
-                      {/* Ad name */}
-                      <div className="w-[160px] shrink-0">
-                        <div className="font-medium text-sm text-foreground">{ad.name}</div>
-                        <div className="text-[10px] text-muted-foreground mt-0.5">
-                          {totalTextVariants(ad)} text variant{totalTextVariants(ad) > 1 ? 's' : ''}
+                      <div className="flex-1 min-w-0">
+                        {/* Ad name + badges row */}
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <h4 className="text-lg font-bold text-foreground truncate">{ad.name}</h4>
+                          <span className={cn(
+                            "px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider",
+                            ad.adType === 'IMAGE' && 'bg-blue-50 text-blue-600',
+                            ad.adType === 'VIDEO' && 'bg-slate-100 text-slate-600',
+                            ad.adType === 'CAROUSEL' && 'bg-slate-100 text-slate-600',
+                          )}>{ad.adType}</span>
+                          <span className={cn(
+                            "px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider",
+                            ad.status === 'ACTIVE' && 'bg-emerald-50 text-emerald-600',
+                            ad.status === 'PAUSED' && 'bg-amber-50 text-amber-600',
+                            ad.status === 'ARCHIVED' && 'bg-muted text-muted-foreground',
+                          )}>{ad.status}</span>
+                          {ad.modified && (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-amber-50 text-amber-600 flex items-center gap-1">
+                              <Pencil className="w-3 h-3" /> Modified
+                            </span>
+                          )}
                         </div>
-                        {ad.modified && (
-                          <Badge variant="secondary" className="text-[9px] mt-1 bg-amber-100 text-amber-700">Modified</Badge>
-                        )}
                       </div>
 
-                      {/* Text variants */}
-                      <div className="flex-[2] space-y-2 min-w-0">
+                      {/* Accept/Reject buttons when suggestion is pending */}
+                      {suggestion && (
+                        <div className="flex items-center gap-1 shrink-0 pt-1">
+                          <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-green-600 hover:bg-green-50" onClick={() => acceptSuggestion(ad.id)}>
+                            <Check className="w-4 h-4" />
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-destructive hover:bg-destructive/10" onClick={() => rejectSuggestion(ad.id)}>
+                            <X className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      )}
+
+                      {/* Collapse toggle */}
+                      <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground" onClick={() => toggleAdCollapse(ad.id)}>
+                        {collapsedAds.has(ad.id) ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+                      </Button>
+                    </div>
+
+                    {/* Collapsible content */}
+                    <div className={cn(
+                      "overflow-hidden transition-all duration-300",
+                      collapsedAds.has(ad.id) ? 'max-h-0 opacity-0 mt-0' : 'max-h-[2000px] opacity-100 mt-4'
+                    )}>
+                      <div className="space-y-3">
                         {renderTextList(ad.id, 'Headlines', 'headlines', ad.headlines, suggestion?.headlines)}
                         {renderTextList(ad.id, 'Bodies', 'bodies', ad.bodies, suggestion?.bodies)}
                         {renderTextList(ad.id, 'Descriptions', 'descriptions', ad.descriptions, suggestion?.descriptions)}
-                      </div>
-
-                      {/* Type */}
-                      <div className="w-16 shrink-0 text-center pt-0.5">
-                        <Badge variant="secondary" className="text-[10px]">{ad.adType}</Badge>
-                      </div>
-
-                      {/* Status */}
-                      <div className="w-16 shrink-0 text-center pt-0.5">
-                        <Badge
-                          variant="secondary"
-                          className={`text-[10px] ${
-                            ad.status === 'ACTIVE'
-                              ? 'bg-success/15 text-success'
-                              : ad.status === 'PAUSED'
-                              ? 'bg-warning/15 text-warning'
-                              : 'bg-muted text-muted-foreground'
-                          }`}
-                        >
-                          {ad.status}
-                        </Badge>
-                      </div>
-
-                      {/* Actions */}
-                      <div className="w-16 shrink-0 flex justify-end gap-1 pt-0.5">
-                        {suggestion && (
-                          <>
-                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-success hover:bg-success/10" onClick={() => acceptSuggestion(ad.id)}>
-                              <Check className="w-3.5 h-3.5" />
-                            </Button>
-                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10" onClick={() => rejectSuggestion(ad.id)}>
-                              <X className="w-3.5 h-3.5" />
-                            </Button>
-                          </>
-                        )}
                       </div>
                     </div>
                   </CardContent>
@@ -595,6 +642,24 @@ export default function AdsProcessing() {
           )}
         </div>
       </div>
+
+      {/* Fixed Bottom "Push to Meta" Bar */}
+      {ads.some(a => a.modified) && (
+        <div className="fixed bottom-0 left-64 right-0 z-30 bg-foreground text-background px-8 py-4 flex items-center justify-between shadow-2xl animate-slide-up">
+          <div className="flex items-center gap-4">
+            <CheckCircle2 className="w-5 h-5 text-green-400" />
+            <span className="text-sm font-bold">{ads.filter(a => a.modified).length} ads modified</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <Button variant="ghost" className="text-background/70 hover:text-background font-bold">
+              Discard changes
+            </Button>
+            <Button onClick={handlePushToMeta} disabled={isPushing} className="bg-primary text-primary-foreground font-bold rounded-xl px-6 hover:scale-[1.02] transition-all">
+              {isPushing ? 'Pushing...' : 'Push to Meta'}
+            </Button>
+          </div>
+        </div>
+      )}
     </AppLayout>
   );
 }

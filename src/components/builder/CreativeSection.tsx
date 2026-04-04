@@ -204,15 +204,42 @@ function ImageUploadBlock({ image, onChange, label, multiVariant }: ImageUploadB
     }
   };
 
-  const handleStoryUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleStoryUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const url = URL.createObjectURL(file);
-    const manualVariant: StoryVariant = { id: crypto.randomUUID(), url, type: 'manual' };
+
+    // Show blob preview immediately
+    const blobUrl = URL.createObjectURL(file);
+    const tempVariant: StoryVariant = { id: crypto.randomUUID(), url: blobUrl, type: 'manual' };
     onChange({
       ...image,
-      storyVariants: [...image.storyVariants, manualVariant],
-      selectedStoryId: manualVariant.id,
+      storyVariants: [...image.storyVariants, tempVariant],
+      selectedStoryId: tempVariant.id,
+    });
+
+    // Upload to Cloudinary for a real HTTPS URL
+    if (cloudinaryConfigured) {
+      try {
+        const cloudinaryUrl = await uploadToCloudinary(file);
+        const finalVariant: StoryVariant = { ...tempVariant, url: cloudinaryUrl };
+        onChange({
+          ...image,
+          storyVariants: [...image.storyVariants.filter(v => v.id !== tempVariant.id), finalVariant],
+          selectedStoryId: finalVariant.id,
+        });
+        toast.success('Story image uploaded to Cloudinary');
+      } catch (err) {
+        toast.error(`Story upload failed: ${(err as Error).message}`);
+      }
+    }
+  };
+
+  const removeStoryVariant = (variantId: string) => {
+    const remaining = image.storyVariants.filter(v => v.id !== variantId);
+    onChange({
+      ...image,
+      storyVariants: remaining,
+      selectedStoryId: image.selectedStoryId === variantId ? (remaining[0]?.id || '') : image.selectedStoryId,
     });
   };
 
@@ -276,18 +303,28 @@ function ImageUploadBlock({ image, onChange, label, multiVariant }: ImageUploadB
                   {image.storyVariants.map((v) => (
                     <div
                       key={v.id}
-                      onClick={() => onChange({ ...image, selectedStoryId: v.id })}
-                      className={cn(
-                        "w-[72px] h-[128px] rounded-lg border-2 cursor-pointer overflow-hidden transition-all relative",
-                        v.id === image.selectedStoryId ? "border-primary ring-2 ring-primary/30" : "border-border hover:border-primary/40"
-                      )}
+                      className="relative group"
                     >
-                      <img src={v.url} alt="Story" className="w-full h-full object-cover" />
-                      <div className="absolute bottom-0 inset-x-0 bg-background/80 text-[9px] text-center py-0.5 font-medium text-foreground">
-                        {v.type === 'generative_fill' && <><Wand2 className="w-2.5 h-2.5 inline mr-0.5" />AI Fill</>}
-                        {v.type === 'crop' && <><Crop className="w-2.5 h-2.5 inline mr-0.5" />Crop</>}
-                        {v.type === 'manual' && <><Image className="w-2.5 h-2.5 inline mr-0.5" />Manual</>}
+                      <div
+                        onClick={() => onChange({ ...image, selectedStoryId: v.id })}
+                        className={cn(
+                          "w-[72px] h-[128px] rounded-lg border-2 cursor-pointer overflow-hidden transition-all relative",
+                          v.id === image.selectedStoryId ? "border-primary ring-2 ring-primary/30" : "border-border hover:border-primary/40"
+                        )}
+                      >
+                        <img src={v.url} alt="Story" className="w-full h-full object-cover" />
+                        <div className="absolute bottom-0 inset-x-0 bg-background/80 text-[9px] text-center py-0.5 font-medium text-foreground">
+                          {v.type === 'generative_fill' && <><Wand2 className="w-2.5 h-2.5 inline mr-0.5" />AI Fill</>}
+                          {v.type === 'crop' && <><Crop className="w-2.5 h-2.5 inline mr-0.5" />Crop</>}
+                          {v.type === 'manual' && <><Image className="w-2.5 h-2.5 inline mr-0.5" />Manual</>}
+                        </div>
                       </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); removeStoryVariant(v.id); }}
+                        className="absolute -top-1.5 -right-1.5 bg-destructive text-destructive-foreground rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                      >
+                        <Trash2 className="w-2.5 h-2.5" />
+                      </button>
                     </div>
                   ))}
                   <div
@@ -631,48 +668,57 @@ export function CreativeSection({ data, onChange }: CreativeSectionProps) {
     }
   };
 
+  const typeOptions: { value: CreativeData['type']; label: string; icon: React.ReactNode }[] = [
+    { value: 'SINGLE_IMAGE', label: 'Image', icon: <Image className="w-3.5 h-3.5" /> },
+    { value: 'SINGLE_VIDEO', label: 'Video', icon: <Video className="w-3.5 h-3.5" /> },
+    { value: 'CAROUSEL', label: 'Carousel', icon: <Images className="w-3.5 h-3.5" /> },
+  ];
+
   return (
     <div className="space-y-4">
+      {/* Header row */}
       <div className="flex items-center justify-between">
-        <Label className="text-sm font-medium">Creative</Label>
         <div className="flex items-center gap-2">
-          <Switch
-            id="multivariant-toggle"
-            checked={multiVariant}
-            onCheckedChange={updateMultiVariant}
-          />
-          <Label htmlFor="multivariant-toggle" className="text-xs text-muted-foreground cursor-pointer">
-            Multi-Variant
-          </Label>
+          <div className="w-6 h-6 rounded-md bg-primary/10 flex items-center justify-center">
+            <Image className="w-3.5 h-3.5 text-primary" />
+          </div>
+          <Label className="text-sm font-bold">Creative</Label>
+        </div>
+        <div className="flex items-center gap-3">
           {multiVariant && (
-            <span className="text-[10px] text-green-600 bg-green-50 px-1.5 py-0.5 rounded">9:16 enabled</span>
+            <span className="text-[10px] font-medium text-green-600 bg-green-50 px-2 py-1 rounded-full">9:16 Story enabled</span>
           )}
+          <div className="flex items-center gap-2 bg-muted/50 rounded-lg px-3 py-1.5">
+            <Switch
+              id="multivariant-toggle"
+              checked={multiVariant}
+              onCheckedChange={updateMultiVariant}
+              className="scale-90"
+            />
+            <Label htmlFor="multivariant-toggle" className="text-xs text-muted-foreground cursor-pointer whitespace-nowrap">
+              Multi-Variant
+            </Label>
+          </div>
         </div>
       </div>
 
-      {/* Type Toggle */}
-      <div className="flex gap-1">
-        <Button
-          variant={data.type === 'SINGLE_IMAGE' ? 'default' : 'outline'}
-          size="sm"
-          onClick={() => updateType('SINGLE_IMAGE')}
-        >
-          SINGLE IMAGE
-        </Button>
-        <Button
-          variant={data.type === 'SINGLE_VIDEO' ? 'default' : 'outline'}
-          size="sm"
-          onClick={() => updateType('SINGLE_VIDEO')}
-        >
-          SINGLE VIDEO
-        </Button>
-        <Button
-          variant={data.type === 'CAROUSEL' ? 'default' : 'outline'}
-          size="sm"
-          onClick={() => updateType('CAROUSEL')}
-        >
-          CAROUSEL
-        </Button>
+      {/* Type Pill Toggle */}
+      <div className="flex bg-muted rounded-xl p-1 w-fit">
+        {typeOptions.map(({ value, label, icon }) => (
+          <button
+            key={value}
+            onClick={() => updateType(value)}
+            className={cn(
+              'flex items-center gap-1.5 py-2 px-4 rounded-lg text-xs font-medium transition-all duration-200',
+              data.type === value
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            {icon}
+            {label}
+          </button>
+        ))}
       </div>
 
       {/* Single Image */}
@@ -705,7 +751,7 @@ export function CreativeSection({ data, onChange }: CreativeSectionProps) {
                   </Button>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 gap-3 items-end">
                   <div>
                     <Label className="text-xs text-muted-foreground">Card Title</Label>
                     <Input
@@ -716,7 +762,7 @@ export function CreativeSection({ data, onChange }: CreativeSectionProps) {
                     />
                   </div>
                   <div>
-                    <Label className="text-xs text-muted-foreground flex items-center gap-1"><Link className="w-3 h-3" /> URL</Label>
+                    <Label className="text-xs text-muted-foreground">URL</Label>
                     <Input
                       value={card.url}
                       onChange={e => updateCard(card.id, { url: e.target.value })}

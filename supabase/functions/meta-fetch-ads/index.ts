@@ -31,7 +31,7 @@ serve(async (req) => {
     // Fetch ads with creative details — paginate through all results
     const allAds: unknown[] = [];
     let url: string | null = metaUrl(
-      `act_${account_id}/ads?fields=id,name,status,creative{id,asset_feed_spec,object_story_spec,effective_object_story_id}&limit=100&access_token=${encodeURIComponent(accessToken)}`
+      `act_${account_id}/ads?fields=id,name,status,campaign{id,name},creative{id,asset_feed_spec,object_story_spec,effective_object_story_id}&limit=100&access_token=${encodeURIComponent(accessToken)}`
     );
 
     while (url) {
@@ -99,6 +99,8 @@ serve(async (req) => {
         name: ad.name,
         status: ad.status,
         ad_type: adType,
+        campaign_id: ad.campaign?.id || null,
+        campaign_name: ad.campaign?.name || null,
         headlines,
         bodies,
         descriptions,

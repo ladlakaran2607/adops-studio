@@ -6,9 +6,13 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { AccountSelector } from '@/components/shared/AccountSelector';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { Plus, Trash2, ChevronUp, ChevronDown, Copy, Loader2 } from 'lucide-react';
-import { useTemplateStore } from '@/store/templateStore';
+import { Badge } from '@/components/ui/badge';
+import { Plus, Trash2, ChevronUp, ChevronDown, Copy, Loader2, CheckCircle2, AlertCircle, Rocket, Pencil } from 'lucide-react';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
+import { useTemplateStore, createEmptyCampaignTemplate, createEmptyAdsetTemplate, createEmptyAdTemplate, createEmptyAdvantageCreativeTemplate } from '@/store/templateStore';
+import { CampaignTemplateForm } from '@/components/templates/CampaignTemplateForm';
+import { AdsetTemplateForm } from '@/components/templates/AdsetTemplateForm';
+import { AdTemplateForm, AdvantageCreativeForm } from '@/pages/Templates';
 import type { CampaignTemplate, AdsetTemplate, AdTemplate, AdvantageCreativeTemplate } from '@/types/templates';
 import { cn } from '@/lib/utils';
 import { CreativeSection, createEmptyCreativeData, type CreativeData } from '@/components/builder/CreativeSection';
@@ -39,6 +43,7 @@ interface AdSetEntry {
   existingAdsetId: string;
   adsetTemplateId: string;
   ads: AdEntry[];
+  collapsed: boolean;
 }
 
 function createAd(index: number): AdEntry {
@@ -64,6 +69,7 @@ function createAdSet(index: number): AdSetEntry {
     existingAdsetId: '',
     adsetTemplateId: '',
     ads: [createAd(1)],
+    collapsed: false,
   };
 }
 
@@ -75,6 +81,16 @@ export default function CampaignBuilder() {
   const [campaignTemplateId, setCampaignTemplateId] = useState('');
   const [adSets, setAdSets] = useState<AdSetEntry[]>([createAdSet(1)]);
   const [isLaunching, setIsLaunching] = useState(false);
+  const [docImportOpen, setDocImportOpen] = useState(true);
+
+  // Template create/edit sheet state
+  type TemplateSheetState =
+    | { type: 'campaign'; template: CampaignTemplate; isNew: boolean; onSelect?: (id: string) => void }
+    | { type: 'adset'; template: AdsetTemplate; isNew: boolean; onSelect?: (id: string) => void }
+    | { type: 'ad'; template: AdTemplate; isNew: boolean; onSelect?: (id: string) => void }
+    | { type: 'advantage'; template: AdvantageCreativeTemplate; isNew: boolean; onSelect?: (id: string) => void }
+    | null;
+  const [templateSheet, setTemplateSheet] = useState<TemplateSheetState>(null);
 
   const { organizationId } = useAuth();
   const { data: adAccounts } = useAdAccounts();
@@ -144,6 +160,7 @@ export default function CampaignBuilder() {
         ...source,
         id: crypto.randomUUID(),
         name: `${source.name} (copy)`,
+        collapsed: false,
         ads: source.ads.map(a => ({ ...a, id: crypto.randomUUID() })),
       };
       const idx = sets.findIndex(s => s.id === adSetId);
@@ -168,6 +185,7 @@ export default function CampaignBuilder() {
       type: 'new' as const,
       existingAdsetId: '',
       adsetTemplateId: '',
+      collapsed: false,
       ads: camp.ads.map((ad) => ({
         id: crypto.randomUUID(),
         name: ad.name,
@@ -474,51 +492,235 @@ export default function CampaignBuilder() {
     }
   };
 
+  // --- Template sheet helpers ---
+  const openCreateCampaignTemplate = () => {
+    setTemplateSheet({
+      type: 'campaign',
+      template: { ...createEmptyCampaignTemplate(), id: crypto.randomUUID(), createdAt: new Date().toISOString() } as CampaignTemplate,
+      isNew: true,
+      onSelect: setCampaignTemplateId,
+    });
+  };
+  const openEditCampaignTemplate = () => {
+    const tpl = campaignStore.items.find(t => t.id === campaignTemplateId);
+    if (tpl) setTemplateSheet({ type: 'campaign', template: tpl, isNew: false });
+  };
+  const openCreateAdsetTemplate = (adSetId: string) => {
+    setTemplateSheet({
+      type: 'adset',
+      template: { ...createEmptyAdsetTemplate(), id: crypto.randomUUID(), createdAt: new Date().toISOString() } as AdsetTemplate,
+      isNew: true,
+      onSelect: (id) => updateAdSet(adSetId, { adsetTemplateId: id }),
+    });
+  };
+  const openEditAdsetTemplate = (adsetTemplateId: string) => {
+    const tpl = adsetStore.items.find(t => t.id === adsetTemplateId);
+    if (tpl) setTemplateSheet({ type: 'adset', template: tpl, isNew: false });
+  };
+  const openCreateAdTemplate = (adSetId: string, adId: string) => {
+    setTemplateSheet({
+      type: 'ad',
+      template: { ...createEmptyAdTemplate(), id: crypto.randomUUID(), createdAt: new Date().toISOString() } as AdTemplate,
+      isNew: true,
+      onSelect: (id) => updateAd(adSetId, adId, { adTemplateId: id }),
+    });
+  };
+  const openEditAdTemplate = (adTemplateId: string) => {
+    const tpl = adStore.items.find(t => t.id === adTemplateId);
+    if (tpl) setTemplateSheet({ type: 'ad', template: tpl, isNew: false });
+  };
+  const openCreateAdvantageTemplate = (adSetId: string, adId: string) => {
+    setTemplateSheet({
+      type: 'advantage',
+      template: { ...createEmptyAdvantageCreativeTemplate(), id: crypto.randomUUID(), createdAt: new Date().toISOString() } as AdvantageCreativeTemplate,
+      isNew: true,
+      onSelect: (id) => updateAd(adSetId, adId, { advantageCreativeId: id }),
+    });
+  };
+  const openEditAdvantageTemplate = (advantageId: string) => {
+    const tpl = advantageStore.items.find(t => t.id === advantageId);
+    if (tpl) setTemplateSheet({ type: 'advantage', template: tpl, isNew: false });
+  };
+  const handleTemplateSave = (template: CampaignTemplate | AdsetTemplate | AdTemplate | AdvantageCreativeTemplate) => {
+    if (!templateSheet) return;
+    if (templateSheet.type === 'campaign') {
+      const t = template as CampaignTemplate;
+      if (templateSheet.isNew) {
+        campaignStore.add(t);
+        templateSheet.onSelect?.(t.id);
+        toast.success(`Template "${t.name}" created`);
+      } else {
+        campaignStore.update(t.id, t);
+        toast.success(`Template "${t.name}" updated`);
+      }
+    } else if (templateSheet.type === 'adset') {
+      const t = template as AdsetTemplate;
+      if (templateSheet.isNew) {
+        adsetStore.add(t);
+        templateSheet.onSelect?.(t.id);
+        toast.success(`Template "${t.name}" created`);
+      } else {
+        adsetStore.update(t.id, t);
+        toast.success(`Template "${t.name}" updated`);
+      }
+    } else if (templateSheet.type === 'ad') {
+      const t = template as AdTemplate;
+      if (templateSheet.isNew) {
+        adStore.add(t);
+        templateSheet.onSelect?.(t.id);
+        toast.success(`Template "${t.name}" created`);
+      } else {
+        adStore.update(t.id, t);
+        toast.success(`Template "${t.name}" updated`);
+      }
+    } else if (templateSheet.type === 'advantage') {
+      const t = template as AdvantageCreativeTemplate;
+      if (templateSheet.isNew) {
+        advantageStore.add(t);
+        templateSheet.onSelect?.(t.id);
+        toast.success(`Template "${t.name}" created`);
+      } else {
+        advantageStore.update(t.id, t);
+        toast.success(`Template "${t.name}" updated`);
+      }
+    }
+    setTemplateSheet(null);
+  };
+
+  // --- Readiness checklist computation ---
+  const readinessItems: { label: string; done: boolean }[] = [];
+  readinessItems.push({ label: 'Account selected', done: !!accountId });
+  readinessItems.push({ label: 'Campaign name', done: !!campaignName.trim() });
+  if (campaignType === 'new') {
+    readinessItems.push({ label: 'Campaign template', done: !!campaignTemplateId });
+  }
+  adSets.forEach((adSet, si) => {
+    const setLabel = `Ad Set ${si + 1}`;
+    if (adSet.type === 'new') {
+      readinessItems.push({ label: `${setLabel} — name`, done: !!adSet.name.trim() });
+      readinessItems.push({ label: `${setLabel} — template`, done: !!adSet.adsetTemplateId });
+    }
+    adSet.ads.forEach((ad, ai) => {
+      const adLabel = `Ad ${ai + 1}`;
+      readinessItems.push({ label: `${adLabel} — template`, done: !!ad.adTemplateId });
+      readinessItems.push({ label: `${adLabel} — headline`, done: ad.headlines.some(h => h.trim()) });
+      readinessItems.push({
+        label: `${adLabel} — creative`,
+        done:
+          (ad.creative.type === 'SINGLE_IMAGE' && !!ad.creative.singleImage?.squareUrl) ||
+          (ad.creative.type === 'SINGLE_VIDEO' && !!ad.creative.singleVideo?.url) ||
+          (ad.creative.type === 'CAROUSEL' && ad.creative.carouselCards.some(c => !!c.image.squareUrl)),
+      });
+    });
+  });
+  const completedCount = readinessItems.filter(i => i.done).length;
+  const totalCount = readinessItems.length;
+
   return (
     <AppLayout>
-      <div className="p-8 max-w-5xl mx-auto space-y-8">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Campaign / Ad Builder</h1>
-          <p className="text-sm text-muted-foreground mt-1">Select templates, add ad copies and launch your campaign</p>
+      {/* Sticky header */}
+      <div className="sticky top-0 z-20 bg-background/80 backdrop-blur-sm border-b border-border px-8 py-4 animate-fade-in">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Campaign Builder</h1>
+            <p className="text-sm text-muted-foreground mt-0.5">Create and configure your Meta ad campaigns</p>
+          </div>
+          {/* Mobile-only Start Campaign (hidden on lg where sidebar shows) */}
+          <Button
+            onClick={handleStartCampaign}
+            disabled={isLaunching || completedCount < totalCount}
+            className="lg:hidden bg-gradient-to-r from-primary to-primary/80 text-primary-foreground font-bold px-6 shadow-lg shadow-primary/20 rounded-xl"
+          >
+            {isLaunching ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Rocket className="w-4 h-4 mr-2" /> Start Campaign</>}
+          </Button>
         </div>
+      </div>
+
+      <div className="flex gap-6 px-8 py-6">
+        {/* Left: form content (scrollable) */}
+        <div className="flex-1 min-w-0 space-y-6">
 
         {/* Document Import */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Import Ad Texts</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-muted-foreground mb-3">
-              Upload a .docx document with ad texts. The system automatically recognizes campaigns, audiences, ad sets and text variants and fills in everything below.
-            </p>
-            <DocumentImport onImport={handleDocumentImport} />
-          </CardContent>
+        <Card className="animate-fade-in">
+          <div
+            className="flex items-center justify-between px-6 py-4 cursor-pointer hover:bg-accent/30 transition-colors rounded-t-xl"
+            onClick={() => setDocImportOpen(!docImportOpen)}
+          >
+            <div>
+              <h3 className="text-sm font-bold text-foreground">Document Import</h3>
+              <p className="text-xs text-muted-foreground">Auto-populate campaign structure from files</p>
+            </div>
+            {docImportOpen ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+          </div>
+          <div className={`overflow-hidden transition-all duration-300 ${docImportOpen ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0'}`}>
+            <CardContent className="pt-0 pb-6">
+              <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-5">
+                {/* Left 2/3: Upload zone — stretch to match right side height */}
+                <div className="flex flex-col">
+                  <div className="flex-1">
+                    <DocumentImport onImport={handleDocumentImport} />
+                  </div>
+                </div>
+                {/* Right 1/3: Description + instructions */}
+                <div className="flex flex-col gap-3">
+                  <div className="bg-accent/30 rounded-xl p-4 border border-primary/10">
+                    <h4 className="text-[10px] font-bold text-primary uppercase tracking-wider mb-2">How it works</h4>
+                    <ul className="text-[11px] text-muted-foreground space-y-1 leading-relaxed">
+                      <li>• Upload a <strong>.docx</strong> with ad texts</li>
+                      <li>• Auto-detects campaigns, ad sets & variants</li>
+                      <li>• Fields below are pre-filled for you</li>
+                    </ul>
+                  </div>
+                  <div className="flex-1">
+                    <Label className="text-[10px] text-muted-foreground uppercase font-medium">Additional Instructions</Label>
+                    <textarea
+                      className="mt-1.5 w-full h-[calc(100%-24px)] min-h-[80px] rounded-lg border border-border bg-background px-3 py-2 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all"
+                      placeholder={"Add context to improve accuracy:\n• \"Headlines in column A\"\n• \"2 audiences per campaign\"\n• \"Ignore summary table\""}
+                    />
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </div>
         </Card>
 
-        {/* 1. Base Configuration */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">1. Base Configuration</CardTitle>
+        {/* 1. Campaign Setup */}
+        <Card className="animate-fade-in">
+          <CardHeader className="pb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-7 h-7 rounded-full bg-primary text-primary-foreground text-xs font-bold flex items-center justify-center">1</div>
+              <CardTitle className="text-sm font-bold uppercase tracking-wider">Campaign Setup</CardTitle>
+            </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-2 gap-6">
               <AccountSelector value={accountId} onChange={setAccountId} />
               <div>
-                <Label>Campaign Type</Label>
-                <RadioGroup
-                  value={campaignType}
-                  onValueChange={(v) => setCampaignType(v as 'new' | 'existing')}
-                  className="flex gap-4 mt-2"
-                >
-                  <div className="flex items-center gap-2">
-                    <RadioGroupItem value="new" id="new-campaign" />
-                    <Label htmlFor="new-campaign" className="font-normal cursor-pointer">New Campaign</Label>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <RadioGroupItem value="existing" id="existing-campaign" />
-                    <Label htmlFor="existing-campaign" className="font-normal cursor-pointer">Existing Campaign</Label>
-                  </div>
-                </RadioGroup>
+                <Label className="text-xs text-muted-foreground uppercase font-medium">Campaign Type</Label>
+                <div className="flex mt-2 bg-muted rounded-xl p-1">
+                  <button
+                    onClick={() => setCampaignType('new')}
+                    className={cn(
+                      'flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all duration-200',
+                      campaignType === 'new'
+                        ? 'bg-primary text-primary-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    New
+                  </button>
+                  <button
+                    onClick={() => setCampaignType('existing')}
+                    className={cn(
+                      'flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all duration-200',
+                      campaignType === 'existing'
+                        ? 'bg-primary text-primary-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    Existing
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -535,21 +737,29 @@ export default function CampaignBuilder() {
                     />
                   </div>
                   <div>
-                    <Label>Campaign Template</Label>
-                    <Select value={campaignTemplateId} onValueChange={setCampaignTemplateId}>
-                      <SelectTrigger className="mt-1.5">
-                        <SelectValue placeholder="Select Campaign Template" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {campaignStore.items.length === 0 ? (
-                          <SelectItem value="_none" disabled>No templates available</SelectItem>
-                        ) : (
-                          campaignStore.items.map(t => (
-                            <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
-                          ))
-                        )}
-                      </SelectContent>
-                    </Select>
+                    <Label className="text-xs text-muted-foreground uppercase font-medium">Template</Label>
+                    <div className="flex items-center gap-1.5 mt-1.5">
+                      <Select value={campaignTemplateId} onValueChange={setCampaignTemplateId}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select Campaign Template" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {campaignStore.items.length === 0 ? (
+                            <SelectItem value="_none" disabled>No templates available</SelectItem>
+                          ) : (
+                            campaignStore.items.map(t => (
+                              <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                            ))
+                          )}
+                        </SelectContent>
+                      </Select>
+                      <Button variant="outline" size="icon" className="h-9 w-9 shrink-0 border-primary/30 text-primary hover:bg-primary/10" title="Create new template" onClick={openCreateCampaignTemplate}>
+                        <Plus className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button variant="outline" size="icon" className="h-9 w-9 shrink-0 border-primary/30 text-primary hover:bg-primary/10" disabled={!campaignTemplateId} title="Edit selected template" onClick={openEditCampaignTemplate}>
+                        <Pencil className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </>
@@ -570,43 +780,73 @@ export default function CampaignBuilder() {
 
         {/* 2. Ad Sets & Ads */}
         <div>
-          <h2 className="text-lg font-semibold text-foreground mb-4">2. Ad Sets & Ads</h2>
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-7 h-7 rounded-full bg-primary text-primary-foreground text-xs font-bold flex items-center justify-center">2</div>
+              <h2 className="text-sm font-bold uppercase tracking-wider">Ad Sets & Ads</h2>
+            </div>
+            <span className="text-xs text-primary font-medium">{adSets.length} Ad Set{adSets.length !== 1 ? 's' : ''} Configured</span>
+          </div>
 
           <div className="space-y-6">
             {adSets.map((adSet, adSetIndex) => (
-              <Card key={adSet.id} className="border-primary/30">
+              <Card key={adSet.id} className="border-primary/30 animate-fade-in">
                 <CardContent className="pt-6 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-base font-semibold text-primary">Ad Set {adSetIndex + 1}</h3>
-                    <div className="flex items-center gap-1">
-                      <Button variant="ghost" size="icon" onClick={() => duplicateAdSet(adSet.id)} className="h-8 w-8 text-muted-foreground hover:text-primary">
+                  <div
+                    className="flex items-center justify-between cursor-pointer"
+                    onClick={() => updateAdSet(adSet.id, { collapsed: !adSet.collapsed })}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="w-1 h-8 rounded-full bg-primary" />
+                      <span className="font-bold text-sm">Ad Set {adSetIndex + 1}{adSet.name ? `: ${adSet.name}` : ''}</span>
+                      {adSet.adsetTemplateId && (
+                        <Badge className="bg-primary/10 text-primary border-primary/20 text-[10px]">TEMPLATE</Badge>
+                      )}
+                      <Badge variant="secondary" className="text-[10px]">{adSet.ads.length} ADS</Badge>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); duplicateAdSet(adSet.id); }} className="h-8 w-8 text-muted-foreground hover:text-primary">
                         <Copy className="w-4 h-4" />
                       </Button>
                       {adSets.length > 1 && (
-                        <Button variant="ghost" size="icon" onClick={() => removeAdSet(adSet.id)} className="text-destructive hover:text-destructive h-8 w-8">
+                        <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); removeAdSet(adSet.id); }} className="text-destructive hover:text-destructive h-8 w-8">
                           <Trash2 className="w-4 h-4" />
                         </Button>
                       )}
+                      {adSet.collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className={`overflow-hidden transition-all duration-300 ${adSet.collapsed ? 'max-h-0 opacity-0' : 'max-h-[9999px] opacity-100'}`}>
+                  <div className="space-y-4">
+
+                  <div className="grid grid-cols-3 gap-4">
                     <div>
                       <Label className="text-xs text-muted-foreground">Ad Set Type</Label>
-                      <RadioGroup
-                        value={adSet.type}
-                        onValueChange={(v) => updateAdSet(adSet.id, { type: v as 'new' | 'existing' })}
-                        className="flex gap-4 mt-1.5"
-                      >
-                        <div className="flex items-center gap-2">
-                          <RadioGroupItem value="new" id={`new-adset-${adSet.id}`} />
-                          <Label htmlFor={`new-adset-${adSet.id}`} className="font-normal cursor-pointer text-sm">New</Label>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <RadioGroupItem value="existing" id={`existing-adset-${adSet.id}`} />
-                          <Label htmlFor={`existing-adset-${adSet.id}`} className="font-normal cursor-pointer text-sm">Existing</Label>
-                        </div>
-                      </RadioGroup>
+                      <div className="flex mt-1.5 bg-muted rounded-xl p-1">
+                        <button
+                          onClick={() => updateAdSet(adSet.id, { type: 'new' })}
+                          className={cn(
+                            'flex-1 py-1.5 px-3 rounded-lg text-xs font-medium transition-all duration-200',
+                            adSet.type === 'new'
+                              ? 'bg-primary text-primary-foreground shadow-sm'
+                              : 'text-muted-foreground hover:text-foreground'
+                          )}
+                        >
+                          New
+                        </button>
+                        <button
+                          onClick={() => updateAdSet(adSet.id, { type: 'existing' })}
+                          className={cn(
+                            'flex-1 py-1.5 px-3 rounded-lg text-xs font-medium transition-all duration-200',
+                            adSet.type === 'existing'
+                              ? 'bg-primary text-primary-foreground shadow-sm'
+                              : 'text-muted-foreground hover:text-foreground'
+                          )}
+                        >
+                          Existing
+                        </button>
+                      </div>
                     </div>
                     {adSet.type === 'new' ? (
                       <div>
@@ -629,27 +869,34 @@ export default function CampaignBuilder() {
                         />
                       </div>
                     )}
-                  </div>
-
-                  {adSet.type === 'new' && (
-                    <div className="max-w-xs">
-                      <Label className="text-xs text-muted-foreground">Adset Template</Label>
-                      <Select value={adSet.adsetTemplateId} onValueChange={v => updateAdSet(adSet.id, { adsetTemplateId: v })}>
-                        <SelectTrigger className="mt-1.5 bg-primary/10 border-primary/30 text-foreground">
-                          <SelectValue placeholder="Select Adset Template" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {adsetStore.items.length === 0 ? (
-                            <SelectItem value="_none" disabled>No templates</SelectItem>
-                          ) : (
-                            adsetStore.items.map(t => (
-                              <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
-                            ))
-                          )}
-                        </SelectContent>
-                      </Select>
+                    {adSet.type === 'new' && (
+                    <div>
+                      <Label className="text-xs text-muted-foreground uppercase font-medium">Adset Template</Label>
+                      <div className="flex items-center gap-1.5 mt-1.5">
+                        <Select value={adSet.adsetTemplateId} onValueChange={v => updateAdSet(adSet.id, { adsetTemplateId: v })}>
+                          <SelectTrigger className="bg-primary/10 border-primary/30 text-foreground">
+                            <SelectValue placeholder="Select Adset Template" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {adsetStore.items.length === 0 ? (
+                              <SelectItem value="_none" disabled>No templates</SelectItem>
+                            ) : (
+                              adsetStore.items.map(t => (
+                                <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                              ))
+                            )}
+                          </SelectContent>
+                        </Select>
+                        <Button variant="outline" size="icon" className="h-9 w-9 shrink-0 border-primary/30 text-primary hover:bg-primary/10" title="Create new template" onClick={() => openCreateAdsetTemplate(adSet.id)}>
+                          <Plus className="w-3.5 h-3.5" />
+                        </Button>
+                        <Button variant="outline" size="icon" className="h-9 w-9 shrink-0 border-primary/30 text-primary hover:bg-primary/10" disabled={!adSet.adsetTemplateId} title="Edit selected template" onClick={() => openEditAdsetTemplate(adSet.adsetTemplateId)}>
+                          <Pencil className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
                     </div>
-                  )}
+                    )}
+                  </div>
 
                   <hr className="border-border" />
 
@@ -719,26 +966,42 @@ export default function CampaignBuilder() {
                               {/* Template Selectors */}
                               <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                  <Label className="text-xs text-muted-foreground">Ad Template</Label>
-                                  <Select value={ad.adTemplateId} onValueChange={v => updateAd(adSet.id, ad.id, { adTemplateId: v })}>
-                                    <SelectTrigger className="mt-1"><SelectValue placeholder="Select Ad Template" /></SelectTrigger>
-                                    <SelectContent>
-                                      {adStore.items.length === 0 ? (
-                                        <SelectItem value="_none" disabled>No templates</SelectItem>
-                                      ) : adStore.items.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
-                                    </SelectContent>
-                                  </Select>
+                                  <Label className="text-xs text-muted-foreground uppercase font-medium">Ad Template</Label>
+                                  <div className="flex items-center gap-1.5 mt-1">
+                                    <Select value={ad.adTemplateId} onValueChange={v => updateAd(adSet.id, ad.id, { adTemplateId: v })}>
+                                      <SelectTrigger><SelectValue placeholder="Select Ad Template" /></SelectTrigger>
+                                      <SelectContent>
+                                        {adStore.items.length === 0 ? (
+                                          <SelectItem value="_none" disabled>No templates</SelectItem>
+                                        ) : adStore.items.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
+                                      </SelectContent>
+                                    </Select>
+                                    <Button variant="outline" size="icon" className="h-9 w-9 shrink-0 border-primary/30 text-primary hover:bg-primary/10" title="Create new template" onClick={() => openCreateAdTemplate(adSet.id, ad.id)}>
+                                      <Plus className="w-3.5 h-3.5" />
+                                    </Button>
+                                    <Button variant="outline" size="icon" className="h-9 w-9 shrink-0 border-primary/30 text-primary hover:bg-primary/10" disabled={!ad.adTemplateId} title="Edit selected template" onClick={() => openEditAdTemplate(ad.adTemplateId)}>
+                                      <Pencil className="w-3.5 h-3.5" />
+                                    </Button>
+                                  </div>
                                 </div>
                                 <div>
-                                  <Label className="text-xs text-muted-foreground">Advantage+ Creative</Label>
-                                  <Select value={ad.advantageCreativeId} onValueChange={v => updateAd(adSet.id, ad.id, { advantageCreativeId: v })}>
-                                    <SelectTrigger className="mt-1"><SelectValue placeholder="Select Advantage+ Template" /></SelectTrigger>
-                                    <SelectContent>
-                                      {advantageStore.items.length === 0 ? (
-                                        <SelectItem value="_none" disabled>No templates</SelectItem>
-                                      ) : advantageStore.items.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
-                                    </SelectContent>
-                                  </Select>
+                                  <Label className="text-xs text-muted-foreground uppercase font-medium">Advantage+ Creative</Label>
+                                  <div className="flex items-center gap-1.5 mt-1">
+                                    <Select value={ad.advantageCreativeId} onValueChange={v => updateAd(adSet.id, ad.id, { advantageCreativeId: v })}>
+                                      <SelectTrigger><SelectValue placeholder="Select Advantage+ Template" /></SelectTrigger>
+                                      <SelectContent>
+                                        {advantageStore.items.length === 0 ? (
+                                          <SelectItem value="_none" disabled>No templates</SelectItem>
+                                        ) : advantageStore.items.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
+                                      </SelectContent>
+                                    </Select>
+                                    <Button variant="outline" size="icon" className="h-9 w-9 shrink-0 border-primary/30 text-primary hover:bg-primary/10" title="Create new template" onClick={() => openCreateAdvantageTemplate(adSet.id, ad.id)}>
+                                      <Plus className="w-3.5 h-3.5" />
+                                    </Button>
+                                    <Button variant="outline" size="icon" className="h-9 w-9 shrink-0 border-primary/30 text-primary hover:bg-primary/10" disabled={!ad.advantageCreativeId} title="Edit selected template" onClick={() => openEditAdvantageTemplate(ad.advantageCreativeId)}>
+                                      <Pencil className="w-3.5 h-3.5" />
+                                    </Button>
+                                  </div>
                                 </div>
                               </div>
 
@@ -785,6 +1048,9 @@ export default function CampaignBuilder() {
                   <Button variant="outline" size="sm" onClick={() => addAd(adSet.id)} className="border-primary/30 text-primary hover:bg-primary/10">
                     <Plus className="w-3.5 h-3.5 mr-1" /> Add New Ad
                   </Button>
+
+                  </div>
+                  </div>
                 </CardContent>
               </Card>
             ))}
@@ -795,17 +1061,185 @@ export default function CampaignBuilder() {
           </Button>
         </div>
 
-        {/* Start Campaign Button */}
-        <div className="flex justify-end pt-4">
-          <Button size="lg" className="px-8" onClick={handleStartCampaign} disabled={isLaunching || !accountId}>
-            {isLaunching ? (
-              <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Launching...</>
-            ) : (
-              'Start Campaign'
-            )}
-          </Button>
         </div>
+
+        {/* Right: sticky sidebar — Start Campaign + Readiness + Summary */}
+        <div className="w-80 shrink-0 hidden lg:block self-start sticky top-[100px]">
+          <div className="space-y-3 max-h-[calc(100vh-120px)] overflow-y-auto overflow-x-visible no-scrollbar p-1">
+
+            {/* Start Campaign button — at the very top */}
+            <Button
+              onClick={handleStartCampaign}
+              disabled={isLaunching || completedCount < totalCount}
+              className="w-full bg-gradient-to-r from-primary to-primary/80 text-primary-foreground font-bold py-5 shadow-lg shadow-primary/20 hover:shadow-xl hover:scale-[1.02] active:scale-95 transition-all duration-200 rounded-xl text-sm"
+            >
+              {isLaunching ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Launching...</>
+              ) : (
+                <><Rocket className="w-4 h-4 mr-2" /> Start Campaign</>
+              )}
+            </Button>
+
+            {/* Readiness checklist */}
+            <Card className="animate-fade-in">
+              <CardHeader className="pb-2 pt-4 px-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Readiness</span>
+                  <Badge variant={completedCount === totalCount ? 'default' : 'secondary'} className="text-xs font-bold">
+                    {completedCount}/{totalCount}
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="px-4 pb-4 space-y-1.5">
+                {readinessItems.map((item, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    {item.done ? (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                    )}
+                    <span className={cn('text-[11px] leading-tight', item.done ? 'text-muted-foreground' : 'text-foreground font-medium')}>
+                      {item.label}
+                    </span>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+
+            {/* Campaign Summary — live overview */}
+            <Card className="animate-fade-in border-primary/10">
+              <CardHeader className="pb-2 pt-4 px-4">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-primary">Campaign Summary</span>
+              </CardHeader>
+              <CardContent className="px-4 pb-4 space-y-3">
+                {/* Campaign info */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[10px] text-muted-foreground uppercase">Campaign</span>
+                  </div>
+                  <p className="text-xs font-bold text-foreground truncate">
+                    {campaignName || <span className="text-muted-foreground italic font-normal">Untitled campaign</span>}
+                  </p>
+                  {campaignTemplateId && (() => {
+                    const tpl = campaignStore.items.find(t => t.id === campaignTemplateId);
+                    return tpl ? (
+                      <div className="flex flex-wrap gap-1.5 mt-1">
+                        <span className="text-[9px] bg-primary/10 text-primary px-1.5 py-0.5 rounded">{tpl.campaignObjective?.replace('OUTCOME_', '') || 'No objective'}</span>
+                        <span className="text-[9px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded">{tpl.buyingType || 'AUCTION'}</span>
+                        {tpl.campaignBudgetValue && (
+                          <span className="text-[9px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded">{tpl.campaignBudgetType} €{tpl.campaignBudgetValue}</span>
+                        )}
+                      </div>
+                    ) : null;
+                  })()}
+                </div>
+
+                <div className="border-t border-border/30" />
+
+                {/* Ad Sets summary */}
+                <div className="space-y-2.5">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[10px] text-muted-foreground uppercase">Ad Sets</span>
+                    <span className="text-[10px] font-bold text-primary">{adSets.length}</span>
+                  </div>
+
+                  {adSets.map((adSet, si) => {
+                    const adsetTpl = adsetStore.items.find(t => t.id === adSet.adsetTemplateId);
+                    return (
+                      <div key={adSet.id} className="bg-background rounded-lg p-2.5 space-y-1.5">
+                        <p className="text-[11px] font-bold text-foreground truncate">
+                          {adSet.name || `Ad Set ${si + 1}`}
+                        </p>
+                        {adsetTpl && (
+                          <div className="flex flex-wrap gap-1">
+                            {adsetTpl.optimization && (
+                              <span className="text-[9px] bg-accent text-accent-foreground px-1.5 py-0.5 rounded">{adsetTpl.optimization}</span>
+                            )}
+                            {adsetTpl.targetAge && (
+                              <span className="text-[9px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded">{adsetTpl.targetGender} {adsetTpl.targetAge}</span>
+                            )}
+                            {adsetTpl.placements && (
+                              <span className="text-[9px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded">{adsetTpl.placements}</span>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Ads within this ad set */}
+                        <div className="space-y-1 mt-1">
+                          {adSet.ads.map((ad, ai) => {
+                            const adTpl = adStore.items.find(t => t.id === ad.adTemplateId);
+                            return (
+                              <div key={ad.id} className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                                <div className="w-1 h-1 rounded-full bg-primary/50" />
+                                <span className="truncate flex-1">{ad.name || `Ad ${ai + 1}`}</span>
+                                <span className="text-[9px] bg-muted px-1 py-0.5 rounded shrink-0">
+                                  {ad.creative.type === 'SINGLE_IMAGE' ? 'IMG' : ad.creative.type === 'SINGLE_VIDEO' ? 'VID' : 'CRL'}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+
+          </div>
+        </div>
+
       </div>
+
+      {/* Template create/edit slide-over */}
+      <Sheet open={templateSheet !== null} onOpenChange={(open) => { if (!open) setTemplateSheet(null); }}>
+        <SheetContent side="right" className="!w-[50vw] !max-w-[50vw] overflow-y-auto p-0 flex flex-col">
+          <SheetHeader className="p-6 pb-4 border-b border-border/30">
+            <SheetTitle className="text-xl font-bold tracking-tight">
+              {templateSheet?.isNew ? 'New' : 'Edit'} {
+                templateSheet?.type === 'campaign' ? 'Campaign' :
+                templateSheet?.type === 'adset' ? 'Ad Set' :
+                templateSheet?.type === 'ad' ? 'Ad' :
+                templateSheet?.type === 'advantage' ? 'Advantage+ Creative' : ''
+              } Template
+            </SheetTitle>
+            <SheetDescription className="text-[10px] font-bold text-primary tracking-widest uppercase">
+              {templateSheet?.isNew ? 'Create a new template' : `ID: ${templateSheet?.template?.id?.substring(0, 8).toUpperCase()}`}
+            </SheetDescription>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto p-6">
+            {templateSheet?.type === 'campaign' && (
+              <CampaignTemplateForm
+                template={templateSheet.template}
+                onSave={(t) => handleTemplateSave(t)}
+                onCancel={() => setTemplateSheet(null)}
+              />
+            )}
+            {templateSheet?.type === 'adset' && (
+              <AdsetTemplateForm
+                template={templateSheet.template}
+                onSave={(t) => handleTemplateSave(t)}
+                onCancel={() => setTemplateSheet(null)}
+                accountId={accountId || undefined}
+              />
+            )}
+            {templateSheet?.type === 'ad' && (
+              <AdTemplateForm
+                template={templateSheet.template}
+                onSave={(t) => handleTemplateSave(t)}
+                onCancel={() => setTemplateSheet(null)}
+              />
+            )}
+            {templateSheet?.type === 'advantage' && (
+              <AdvantageCreativeForm
+                template={templateSheet.template}
+                onSave={(t) => handleTemplateSave(t)}
+                onCancel={() => setTemplateSheet(null)}
+              />
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
     </AppLayout>
   );
 }

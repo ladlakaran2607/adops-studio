@@ -11,7 +11,8 @@ import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Plus, Megaphone, Layers, LayoutTemplate, Zap, Brain, ArrowLeft, Save, Image, Video, GalleryHorizontal, ShoppingBag } from 'lucide-react';
+import { Plus, Megaphone, Layers, LayoutTemplate, Zap, Brain, ArrowLeft, Save, Image, Video, GalleryHorizontal, ShoppingBag, Sparkles, X } from 'lucide-react';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { useTemplateStore, createEmptyCampaignTemplate, createEmptyAdsetTemplate, createEmptyAdTemplate, createEmptyAdvantageCreativeTemplate, createEmptyAIRule } from '@/store/templateStore';
 import { useAdAccounts } from '@/hooks/useAdAccounts';
 import type { CampaignTemplate, AdsetTemplate, AdTemplate, AdvantageCreativeTemplate, AIEnhancementRule, ImageEnhancements, VideoEnhancements, CarouselEnhancements, CatalogEnhancements } from '@/types/templates';
@@ -25,7 +26,7 @@ const ctaOptions = [
   'SEE_MENU', 'WHATSAPP_MESSAGE',
 ];
 
-function AdTemplateForm({ template, onSave, onCancel }: { template: AdTemplate; onSave: (t: AdTemplate) => void; onCancel: () => void }) {
+export function AdTemplateForm({ template, onSave, onCancel }: { template: AdTemplate; onSave: (t: AdTemplate) => void; onCancel: () => void }) {
   const [form, setForm] = useState(template);
   const set = <K extends keyof AdTemplate>(key: K, val: AdTemplate[K]) => setForm(f => ({ ...f, [key]: val }));
   return (
@@ -139,7 +140,7 @@ function EnhancementSection({ title, icon: Icon, fields, values, onChange }: {
   );
 }
 
-function AdvantageCreativeForm({ template, onSave, onCancel }: { template: AdvantageCreativeTemplate; onSave: (t: AdvantageCreativeTemplate) => void; onCancel: () => void }) {
+export function AdvantageCreativeForm({ template, onSave, onCancel }: { template: AdvantageCreativeTemplate; onSave: (t: AdvantageCreativeTemplate) => void; onCancel: () => void }) {
   const [form, setForm] = useState(template);
   return (
     <div className="space-y-6">
@@ -214,8 +215,10 @@ type EditingState =
 
 const tabConfig = [
   { value: 'campaigns', label: 'Campaigns', icon: Megaphone },
-  { value: 'adsets', label: 'Adsets', icon: Layers },
+  { value: 'adsets', label: 'Ad Sets', icon: Layers },
   { value: 'ads', label: 'Ads', icon: LayoutTemplate },
+  { value: 'advantage', label: 'Advantage+', icon: Sparkles },
+  { value: 'rules', label: 'Rules', icon: Brain },
 ];
 
 const objectiveLabels: Record<string, string> = {
@@ -242,7 +245,9 @@ export default function Templates() {
   const counts: Record<string, number> = {
     campaigns: campaigns.items.length,
     adsets: adsets.items.length,
-    ads: ads.items.length + advantage.items.length + aiRules.items.length,
+    ads: ads.items.length,
+    advantage: advantage.items.length,
+    rules: aiRules.items.length,
   };
 
   // --- Add handlers ---
@@ -257,6 +262,12 @@ export default function Templates() {
       case 'ads':
         setEditing({ type: 'ad', template: { ...createEmptyAdTemplate(), id: crypto.randomUUID(), createdAt: new Date().toISOString() } as AdTemplate, isNew: true });
         break;
+      case 'advantage':
+        setEditing({ type: 'advantage', template: { ...createEmptyAdvantageCreativeTemplate(), id: crypto.randomUUID(), createdAt: new Date().toISOString() } as AdvantageCreativeTemplate, isNew: true });
+        break;
+      case 'rules':
+        setEditing({ type: 'ai', template: { ...createEmptyAIRule(), id: crypto.randomUUID(), createdAt: new Date().toISOString() } as AIEnhancementRule, isNew: true });
+        break;
     }
   };
 
@@ -269,64 +280,121 @@ export default function Templates() {
   const saveAdvantage = (t: AdvantageCreativeTemplate) => { editing?.isNew ? advantage.add(t) : advantage.update(t.id, t); setEditing(null); };
   const saveAI = (t: AIEnhancementRule) => { editing?.isNew ? aiRules.add(t) : aiRules.update(t.id, t); setEditing(null); };
 
-  // --- Render editing form ---
-  if (editing) {
-    return (
-      <AppLayout>
-        <div className="p-8 max-w-4xl">
-          {editing.type === 'campaign' && <CampaignTemplateForm template={editing.template} onSave={saveCampaign} onCancel={cancelEdit} />}
-          {editing.type === 'adset' && <AdsetTemplateForm template={editing.template} onSave={saveAdset} onCancel={cancelEdit} accountId={firstAccountId} />}
-          {editing.type === 'ad' && <AdTemplateForm template={editing.template} onSave={saveAd} onCancel={cancelEdit} />}
-          {editing.type === 'advantage' && <AdvantageCreativeForm template={editing.template} onSave={saveAdvantage} onCancel={cancelEdit} />}
-          {editing.type === 'ai' && <AIRuleForm template={editing.template} onSave={saveAI} onCancel={cancelEdit} />}
-        </div>
-      </AppLayout>
-    );
-  }
+  // --- Slide-over edit panel (Sheet) ---
+  const editingTitle = editing?.type === 'campaign' ? 'Campaign Template'
+    : editing?.type === 'adset' ? 'Ad Set Template'
+    : editing?.type === 'ad' ? 'Ad Template'
+    : editing?.type === 'advantage' ? 'Advantage+ Creative Template'
+    : editing?.type === 'ai' ? 'AI Enhancement Rule'
+    : '';
 
-  // --- Empty state ---
-  const EmptyState = ({ label }: { label: string }) => (
-    <div className="mt-12 text-center text-muted-foreground">
-      <p className="text-lg font-medium">No {label} yet</p>
-      <p className="text-sm mt-1">Create your first template to get started.</p>
+  const renderEditSheet = () => (
+    <Sheet open={editing !== null} onOpenChange={(open) => { if (!open) cancelEdit(); }}>
+      <SheetContent side="right" className="!w-[50vw] !max-w-[50vw] overflow-y-auto p-0 flex flex-col">
+        <SheetHeader className="p-6 pb-4 border-b border-border/30">
+          <SheetTitle className="text-xl font-bold tracking-tight">
+            {editing?.isNew ? 'New' : 'Edit'} {editingTitle}
+          </SheetTitle>
+          <SheetDescription className="text-[10px] font-bold text-primary tracking-widest uppercase">
+            {editing?.isNew ? 'Create a new template' : `ID: ${editing?.template?.id?.substring(0, 8).toUpperCase()}`}
+          </SheetDescription>
+        </SheetHeader>
+
+        <div className="flex-1 overflow-y-auto p-6">
+          {editing?.type === 'campaign' && <CampaignTemplateForm template={editing.template} onSave={saveCampaign} onCancel={cancelEdit} />}
+          {editing?.type === 'adset' && <AdsetTemplateForm template={editing.template} onSave={saveAdset} onCancel={cancelEdit} accountId={firstAccountId} />}
+          {editing?.type === 'ad' && <AdTemplateForm template={editing.template} onSave={saveAd} onCancel={cancelEdit} />}
+          {editing?.type === 'advantage' && <AdvantageCreativeForm template={editing.template} onSave={saveAdvantage} onCancel={cancelEdit} />}
+          {editing?.type === 'ai' && <AIRuleForm template={editing.template} onSave={saveAI} onCancel={cancelEdit} />}
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+
+  // --- Empty state (matching Stitch mockup) ---
+  const EmptyState = ({ label, onAction }: { label: string; onAction?: () => void }) => (
+    <div className="lg:col-span-2 border-2 border-dashed border-primary/20 rounded-xl flex flex-col items-center justify-center p-12 bg-accent/20 animate-fade-in">
+      <div className="w-16 h-16 bg-card rounded-2xl flex items-center justify-center mb-4 shadow-sm">
+        <Sparkles className="w-7 h-7 text-primary" />
+      </div>
+      <h3 className="font-bold text-foreground text-lg mb-2">Build more frameworks</h3>
+      <p className="text-muted-foreground text-center max-w-sm mb-6 text-sm">
+        Start by creating a reusable {label} framework to launch your Meta Ads faster.
+      </p>
+      {onAction && (
+        <Button
+          variant="outline"
+          onClick={onAction}
+          className="border-primary/20 text-primary bg-accent hover:bg-primary hover:text-primary-foreground transition-all duration-200 rounded-full px-6"
+        >
+          Create your first template
+        </Button>
+      )}
     </div>
   );
 
   return (
     <AppLayout>
-      <div className="p-8 max-w-6xl">
-        {/* Header */}
-        <div className="flex items-start justify-between mb-8">
+      {/* Sticky header area */}
+      <div className="sticky top-0 z-20 bg-background/80 backdrop-blur-md px-8 py-8">
+        {/* Page title + Create button inline */}
+        <div className="flex items-center justify-between mb-8 animate-fade-in">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Templates</h1>
+            <h1 className="text-3xl font-bold tracking-tight">Templates</h1>
             <p className="text-muted-foreground text-sm mt-1">
-              Manage all your presets in one place — campaigns, adsets, ads, creative enhancements and AI rules.
+              Manage reusable presets for campaigns, ad sets, and ads
             </p>
           </div>
-          <Button onClick={handleAdd} className="gap-2">
-            <Plus className="w-4 h-4" />
+          <Button
+            onClick={handleAdd}
+            className="bg-gradient-to-r from-primary to-primary/80 text-primary-foreground font-bold px-6 py-3 rounded-xl shadow-lg shadow-primary/20 hover:shadow-xl hover:scale-[1.02] active:scale-95 transition-all duration-200"
+          >
+            <Plus className="w-4 h-4 mr-2" />
             New Template
           </Button>
         </div>
 
-        {/* Tabs */}
+        {/* Tab bar — golden underline style matching Stitch */}
+        <div className="flex items-center gap-8 border-b border-border/30">
+          {tabConfig.map(({ value, label }) => (
+            <button
+              key={value}
+              onClick={() => setActiveTab(value)}
+              className={`relative pb-4 flex items-center gap-2 font-semibold transition-all duration-200 ${
+                activeTab === value
+                  ? 'text-primary border-b-2 border-primary font-bold'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <span>{label}</span>
+              {counts[value] > 0 && (
+                <span className={`text-[10px] px-2 py-0.5 rounded-full ${
+                  activeTab === value
+                    ? 'bg-primary/10 text-primary'
+                    : 'bg-accent text-primary'
+                }`}>
+                  {counts[value]}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="px-8 pb-12">
+        {/* Tab contents rendered manually (not using Tabs component for custom tab bar) */}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="bg-secondary/50 mb-6">
-            {tabConfig.map(({ value, label, icon: Icon }) => (
-              <TabsTrigger key={value} value={value} className="gap-2 data-[state=active]:bg-card data-[state=active]:text-primary">
-                <Icon className="w-4 h-4" />
-                {label}
-                {counts[value] > 0 && (
-                  <span className="ml-1 text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded-full">{counts[value]}</span>
-                )}
-              </TabsTrigger>
+          {/* Hidden TabsList for accessibility — visual tabs are above */}
+          <TabsList className="hidden">
+            {tabConfig.map(({ value, label }) => (
+              <TabsTrigger key={value} value={value}>{label}</TabsTrigger>
             ))}
           </TabsList>
 
           {/* Campaign Templates */}
           <TabsContent value="campaigns">
-            {campaigns.items.length === 0 ? <EmptyState label="campaign templates" /> : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {campaigns.items.length === 0 ? <EmptyState label="campaign templates" onAction={handleAdd} /> : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {campaigns.items.map(t => (
                   <TemplateCard key={t.id} name={t.name} subtitle={objectiveLabels[t.campaignObjective] || t.campaignObjective || 'No objective set'}
                     details={[
@@ -346,8 +414,8 @@ export default function Templates() {
 
           {/* Adset Templates */}
           <TabsContent value="adsets">
-            {adsets.items.length === 0 ? <EmptyState label="adset templates" /> : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {adsets.items.length === 0 ? <EmptyState label="adset templates" onAction={handleAdd} /> : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {adsets.items.map(t => (
                   <TemplateCard key={t.id} name={t.name} subtitle={`${t.optimization} — ${t.adsetConversionEvent}`}
                     details={[
@@ -365,86 +433,74 @@ export default function Templates() {
             )}
           </TabsContent>
 
-          {/* Ads — includes Ad Templates, Advantage+ Creative, AI Rules */}
+          {/* Ad Templates */}
           <TabsContent value="ads">
-            <div className="space-y-10">
-              {/* Sub-section: Ad Templates */}
-              <div>
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold flex items-center gap-2"><LayoutTemplate className="w-4 h-4" />Ad Templates</h2>
-                  <Button variant="outline" size="sm" onClick={() => setEditing({ type: 'ad', template: { ...createEmptyAdTemplate(), id: crypto.randomUUID(), createdAt: new Date().toISOString() } as AdTemplate, isNew: true })} className="gap-1.5"><Plus className="w-3.5 h-3.5" />New</Button>
-                </div>
-                {ads.items.length === 0 ? <p className="text-sm text-muted-foreground">No ad templates created yet.</p> : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {ads.items.map(t => (
-                      <TemplateCard key={t.id} name={t.name} subtitle={t.creativeType.replace(/_/g, ' ')}
-                        details={[
-                          { label: 'CTA', value: t.callToAction.replace(/_/g, ' ') },
-                          { label: 'URL Params', value: t.urlParameters || 'None' },
-                          { label: 'Domain', value: t.conversionDomain || '—' },
-                          { label: 'Pixel', value: t.trackingPixelId || '—' },
-                        ]}
-                        onEdit={() => setEditing({ type: 'ad', template: t, isNew: false })}
-                        onDelete={() => ads.remove(t.id)}
-                        onDuplicate={() => ads.add({ ...t, id: crypto.randomUUID(), name: `${t.name} (copy)`, createdAt: new Date().toISOString() })}
-                      />
-                    ))}
-                  </div>
-                )}
+            {ads.items.length === 0 ? <EmptyState label="ad templates" onAction={handleAdd} /> : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {ads.items.map(t => (
+                  <TemplateCard key={t.id} name={t.name} subtitle={t.creativeType.replace(/_/g, ' ')}
+                    details={[
+                      { label: 'CTA', value: t.callToAction.replace(/_/g, ' ') },
+                      { label: 'URL Params', value: t.urlParameters || 'None' },
+                      { label: 'Domain', value: t.conversionDomain || '---' },
+                      { label: 'Pixel', value: t.trackingPixelId || '---' },
+                    ]}
+                    onEdit={() => setEditing({ type: 'ad', template: t, isNew: false })}
+                    onDelete={() => ads.remove(t.id)}
+                    onDuplicate={() => ads.add({ ...t, id: crypto.randomUUID(), name: `${t.name} (copy)`, createdAt: new Date().toISOString() })}
+                  />
+                ))}
               </div>
+            )}
+          </TabsContent>
 
-              {/* Sub-section: Advantage+ Creative */}
-              <div>
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold flex items-center gap-2"><Zap className="w-4 h-4" />Advantage+ Creative</h2>
-                  <Button variant="outline" size="sm" onClick={() => setEditing({ type: 'advantage', template: { ...createEmptyAdvantageCreativeTemplate(), id: crypto.randomUUID(), createdAt: new Date().toISOString() } as AdvantageCreativeTemplate, isNew: true })} className="gap-1.5"><Plus className="w-3.5 h-3.5" />New</Button>
-                </div>
-                {advantage.items.length === 0 ? <p className="text-sm text-muted-foreground">No Advantage+ creative templates created yet.</p> : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {advantage.items.map(t => (
-                      <TemplateCard key={t.id} name={t.name} subtitle="Creative Enhancements"
-                        details={[
-                          { label: 'Images', value: t.imageEnhancements?.advantageCreative ? 'On' : 'Off' },
-                          { label: 'Videos', value: t.videoEnhancements?.advantageCreative ? 'On' : 'Off' },
-                          { label: 'Carousel', value: t.carouselEnhancements?.advantageCreative ? 'On' : 'Off' },
-                          { label: 'Catalog', value: t.catalogEnhancements?.dynamicMedia ? 'On' : 'Off' },
-                        ]}
-                        onEdit={() => setEditing({ type: 'advantage', template: t, isNew: false })}
-                        onDelete={() => advantage.remove(t.id)}
-                        onDuplicate={() => advantage.add({ ...t, id: crypto.randomUUID(), name: `${t.name} (copy)`, createdAt: new Date().toISOString() })}
-                      />
-                    ))}
-                  </div>
-                )}
+          {/* Advantage+ Creative Templates */}
+          <TabsContent value="advantage">
+            {advantage.items.length === 0 ? <EmptyState label="Advantage+ creative templates" onAction={handleAdd} /> : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {advantage.items.map(t => (
+                  <TemplateCard key={t.id} name={t.name} subtitle="Creative Enhancements"
+                    details={[
+                      { label: 'Images', value: t.imageEnhancements?.advantageCreative ? 'On' : 'Off' },
+                      { label: 'Videos', value: t.videoEnhancements?.advantageCreative ? 'On' : 'Off' },
+                      { label: 'Carousel', value: t.carouselEnhancements?.advantageCreative ? 'On' : 'Off' },
+                      { label: 'Catalog', value: t.catalogEnhancements?.dynamicMedia ? 'On' : 'Off' },
+                    ]}
+                    onEdit={() => setEditing({ type: 'advantage', template: t, isNew: false })}
+                    onDelete={() => advantage.remove(t.id)}
+                    onDuplicate={() => advantage.add({ ...t, id: crypto.randomUUID(), name: `${t.name} (copy)`, createdAt: new Date().toISOString() })}
+                  />
+                ))}
               </div>
+            )}
+          </TabsContent>
 
-              {/* Sub-section: AI Rules */}
-              <div>
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold flex items-center gap-2"><Brain className="w-4 h-4" />AI Enhancement Rules</h2>
-                  <Button variant="outline" size="sm" onClick={() => setEditing({ type: 'ai', template: { ...createEmptyAIRule(), id: crypto.randomUUID(), createdAt: new Date().toISOString() } as AIEnhancementRule, isNew: true })} className="gap-1.5"><Plus className="w-3.5 h-3.5" />New</Button>
-                </div>
-                {aiRules.items.length === 0 ? <p className="text-sm text-muted-foreground">No AI rules created yet.</p> : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {aiRules.items.map(t => (
-                      <TemplateCard key={t.id} name={t.name} subtitle={t.ruleType || 'No type'}
-                        details={[
-                          { label: 'Conditions', value: t.conditions?.substring(0, 30) || 'None' },
-                          { label: 'Actions', value: t.actions?.substring(0, 30) || 'None' },
-                          { label: 'Status', value: t.enabled ? 'Enabled' : 'Disabled' },
-                        ]}
-                        onEdit={() => setEditing({ type: 'ai', template: t, isNew: false })}
-                        onDelete={() => aiRules.remove(t.id)}
-                        onDuplicate={() => aiRules.add({ ...t, id: crypto.randomUUID(), name: `${t.name} (copy)`, createdAt: new Date().toISOString() })}
-                      />
-                    ))}
-                  </div>
-                )}
+          {/* AI Enhancement Rules */}
+          <TabsContent value="rules">
+            {aiRules.items.length === 0 ? <EmptyState label="AI enhancement rules" onAction={handleAdd} /> : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {aiRules.items.map(t => (
+                  <TemplateCard key={t.id} name={t.name} subtitle={t.ruleType || 'No type'}
+                    details={[
+                      { label: 'Conditions', value: t.conditions?.substring(0, 30) || 'None' },
+                      { label: 'Actions', value: t.actions?.substring(0, 30) || 'None' },
+                      { label: 'Status', value: t.enabled ? 'Enabled' : 'Disabled' },
+                    ]}
+                    onEdit={() => setEditing({ type: 'ai', template: t, isNew: false })}
+                    onDelete={() => aiRules.remove(t.id)}
+                    onDuplicate={() => aiRules.add({ ...t, id: crypto.randomUUID(), name: `${t.name} (copy)`, createdAt: new Date().toISOString() })}
+                  />
+                ))}
               </div>
-            </div>
+            )}
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* Slide-over edit panel */}
+      {renderEditSheet()}
     </AppLayout>
   );
 }
+
+
