@@ -827,7 +827,11 @@ export default function CampaignBuilder() {
                 <Label className="text-xs text-muted-foreground uppercase font-medium">Campaign Type</Label>
                 <div className="flex mt-2 bg-muted rounded-xl p-1">
                   <button
-                    onClick={() => setCampaignType('new')}
+                    onClick={() => {
+                      setCampaignType('new');
+                      // Reset all ad sets to "new" since existing ad sets can't be added to new campaigns
+                      setAdSets(sets => sets.map(s => ({ ...s, type: 'new' as const })));
+                    }}
                     className={cn(
                       'flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all duration-200',
                       campaignType === 'new'
@@ -948,34 +952,36 @@ export default function CampaignBuilder() {
                   <div className={`overflow-hidden transition-all duration-300 ${adSet.collapsed ? 'max-h-0 opacity-0' : 'max-h-[9999px] opacity-100'}`}>
                   <div className="space-y-4">
 
-                  <div className="grid grid-cols-3 gap-4">
-                    <div>
-                      <Label className="text-xs text-muted-foreground">Ad Set Type</Label>
-                      <div className="flex mt-1.5 bg-muted rounded-xl p-1">
-                        <button
-                          onClick={() => updateAdSet(adSet.id, { type: 'new' })}
-                          className={cn(
-                            'flex-1 py-1.5 px-3 rounded-lg text-xs font-medium transition-all duration-200',
-                            adSet.type === 'new'
-                              ? 'bg-primary text-primary-foreground shadow-sm'
-                              : 'text-muted-foreground hover:text-foreground'
-                          )}
-                        >
-                          New
-                        </button>
-                        <button
-                          onClick={() => updateAdSet(adSet.id, { type: 'existing' })}
-                          className={cn(
-                            'flex-1 py-1.5 px-3 rounded-lg text-xs font-medium transition-all duration-200',
-                            adSet.type === 'existing'
-                              ? 'bg-primary text-primary-foreground shadow-sm'
-                              : 'text-muted-foreground hover:text-foreground'
-                          )}
-                        >
-                          Existing
-                        </button>
+                  <div className={cn("grid gap-4", campaignType === 'existing' ? 'grid-cols-3' : 'grid-cols-2')}>
+                    {campaignType === 'existing' && (
+                      <div>
+                        <Label className="text-xs text-muted-foreground">Ad Set Type</Label>
+                        <div className="flex mt-1.5 bg-muted rounded-xl p-1">
+                          <button
+                            onClick={() => updateAdSet(adSet.id, { type: 'new' })}
+                            className={cn(
+                              'flex-1 py-1.5 px-3 rounded-lg text-xs font-medium transition-all duration-200',
+                              adSet.type === 'new'
+                                ? 'bg-primary text-primary-foreground shadow-sm'
+                                : 'text-muted-foreground hover:text-foreground'
+                            )}
+                          >
+                            New
+                          </button>
+                          <button
+                            onClick={() => updateAdSet(adSet.id, { type: 'existing' })}
+                            className={cn(
+                              'flex-1 py-1.5 px-3 rounded-lg text-xs font-medium transition-all duration-200',
+                              adSet.type === 'existing'
+                                ? 'bg-primary text-primary-foreground shadow-sm'
+                                : 'text-muted-foreground hover:text-foreground'
+                            )}
+                          >
+                            Existing
+                          </button>
+                        </div>
                       </div>
-                    </div>
+                    )}
                     {adSet.type === 'new' ? (
                       <div>
                         <Label className="text-xs text-muted-foreground">Ad Set Name</Label>
@@ -995,6 +1001,7 @@ export default function CampaignBuilder() {
                           placeholder="Enter the Ad Set ID"
                           className="mt-1.5"
                         />
+                        <p className="text-[10px] text-amber-600 mt-1">Use an ad set ID that belongs to the campaign above</p>
                       </div>
                     )}
                     {adSet.type === 'new' && (
