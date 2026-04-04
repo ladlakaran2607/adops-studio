@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,6 +22,109 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useAdAccounts } from '@/hooks/useAdAccounts';
 import { useLeadForms } from '@/hooks/useLeadForms';
 import { toast } from 'sonner';
+
+// ── Launch overlay quotes ──
+const launchQuotes = [
+  "Brewing your campaign magic...",
+  "Teaching Meta about your audience...",
+  "Your ads are getting dressed for the big show...",
+  "Connecting pixels to people...",
+  "Good things take a few seconds...",
+  "Turning your creativity into conversions...",
+  "Warming up the Meta auction engine...",
+  "Preparing your message for the world...",
+  "Aligning the stars for your campaign...",
+  "Crafting the perfect ad experience...",
+  "Optimizing for maximum impact...",
+  "Your audience is about to meet their new favorite brand...",
+  "Building bridges between your brand and customers...",
+  "Setting up your digital storefront...",
+  "Fine-tuning the targeting parameters...",
+  "Calibrating the bidding strategy...",
+  "Loading creative assets into the pipeline...",
+  "Syncing with Meta's ad delivery system...",
+  "Almost there — great campaigns take a moment...",
+  "Packaging your ad copy with care...",
+  "Spinning up the creative engine...",
+  "Your campaign is about to make its debut...",
+  "Handshaking with Meta's servers...",
+  "Validating creative specs with Meta...",
+  "Uploading your vision to the cloud...",
+  "Preparing placement optimization rules...",
+  "Mapping your audience across platforms...",
+  "Assembling the perfect ad cocktail...",
+  "Turning headlines into scroll-stoppers...",
+  "Your ROI journey starts now...",
+  "Making sure every pixel is in place...",
+  "Configuring cross-platform delivery...",
+  "Initializing the engagement engine...",
+  "Setting sail on the Meta ocean...",
+  "Fueling up for launch...",
+  "Polishing your ad creative one last time...",
+  "Checking the flight plan for your campaign...",
+  "Activating audience intelligence...",
+  "Preparing your brand's digital megaphone...",
+  "Running final pre-flight checks...",
+  "Your competitors won't know what hit them...",
+  "Locking in your budget allocation...",
+  "Encoding creative assets for delivery...",
+  "Meta is rolling out the red carpet for your ads...",
+  "Translating your strategy into results...",
+  "Registering your campaign with the auction house...",
+  "Dialing in the frequency caps...",
+  "Your ad copy is stretching before the marathon...",
+  "Queueing up impressions...",
+  "Igniting the campaign boosters...",
+  "Warming up the A/B testing engine...",
+  "Securing your spot in the auction...",
+  "Deploying ads to feed, story, and reels...",
+  "Your brand story is about to unfold...",
+  "Distributing creative across placements...",
+  "Tightening the targeting bolts...",
+  "Whispering to the algorithm about your ideal customer...",
+  "Planting seeds for your conversion garden...",
+  "Loading the creative cannon...",
+  "Calculating optimal delivery windows...",
+  "Tuning the relevance score antenna...",
+  "Your campaign DNA is being sequenced...",
+  "Establishing communication with Meta HQ...",
+  "Wrapping your message in the perfect format...",
+  "Charging up the impression battery...",
+  "Mixing the perfect audience cocktail...",
+  "Your ads are in the green room, ready for the spotlight...",
+  "Programming the delivery schedule...",
+  "Encrypting and transmitting campaign data...",
+  "Briefing the Meta AI on your objectives...",
+  "Hang tight — brilliance is loading...",
+  "Strapping in for liftoff...",
+  "Telling Meta's algorithm your brand's story...",
+  "Crunching the numbers for optimal spend...",
+  "Your creative is boarding the delivery vehicle...",
+  "Painting the digital billboard...",
+  "Wiring up the conversion tracking...",
+  "Negotiating prime ad real estate...",
+  "Your campaign is clearing the runway...",
+  "Orchestrating the multi-platform symphony...",
+  "Hold tight — your ads are almost live...",
+  "Plugging into the social media matrix...",
+  "Finalizing the audience segmentation...",
+  "Your brand's signal is being amplified...",
+  "Dispatching creative agents across the metaverse...",
+  "Calibrating the engagement radar...",
+  "Launching in 3... 2... 1...",
+  "Preparing to capture hearts and clicks...",
+  "Aligning budget with opportunity...",
+  "Your campaign is being gift-wrapped for delivery...",
+  "Initiating the impression delivery sequence...",
+  "Turbocharging your reach...",
+  "The algorithm is excited about this one...",
+  "Deploying your secret marketing weapon...",
+  "Channeling creative energy into conversions...",
+  "Synchronizing ad sets with the Meta ecosystem...",
+  "Your message is finding its perfect audience...",
+  "Buckle up — campaign launch in progress...",
+  "Making marketing magic happen...",
+];
 
 interface AdEntry {
   id: string;
@@ -82,6 +185,21 @@ export default function CampaignBuilder() {
   const [adSets, setAdSets] = useState<AdSetEntry[]>([createAdSet(1)]);
   const [isLaunching, setIsLaunching] = useState(false);
   const [docImportOpen, setDocImportOpen] = useState(true);
+  const [launchQuote, setLaunchQuote] = useState('');
+  const quoteIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Rotate quotes during launch
+  useEffect(() => {
+    if (isLaunching) {
+      setLaunchQuote(launchQuotes[Math.floor(Math.random() * launchQuotes.length)]);
+      quoteIntervalRef.current = setInterval(() => {
+        setLaunchQuote(launchQuotes[Math.floor(Math.random() * launchQuotes.length)]);
+      }, 5000);
+    } else {
+      if (quoteIntervalRef.current) clearInterval(quoteIntervalRef.current);
+    }
+    return () => { if (quoteIntervalRef.current) clearInterval(quoteIntervalRef.current); };
+  }, [isLaunching]);
 
   // Template create/edit sheet state
   type TemplateSheetState =
@@ -1200,6 +1318,64 @@ export default function CampaignBuilder() {
         </div>
 
       </div>
+
+      {/* Launch Overlay */}
+      {isLaunching && (
+        <div className="fixed inset-0 z-50 bg-foreground/80 backdrop-blur-sm flex items-center justify-center animate-fade-in">
+          <div className="bg-card rounded-2xl shadow-2xl p-10 max-w-lg w-full mx-4 text-center space-y-6 animate-scale-in">
+            {/* Spinner */}
+            <div className="flex justify-center">
+              <div className="w-16 h-16 rounded-full border-4 border-primary/20 border-t-primary animate-spin" />
+            </div>
+
+            {/* Quote */}
+            <p className="text-lg font-medium text-foreground animate-fade-in" key={launchQuote}>
+              {launchQuote}
+            </p>
+
+            {/* Campaign Summary */}
+            <div className="bg-background rounded-xl p-5 text-left space-y-3">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-primary">Launching Campaign</p>
+
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Campaign</span>
+                  <span className="font-bold truncate ml-4">{campaignName || 'Untitled'}</span>
+                </div>
+                {campaignTemplateId && (() => {
+                  const tpl = campaignStore.items.find(t => t.id === campaignTemplateId);
+                  return tpl ? (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Objective</span>
+                      <span className="font-medium">{tpl.campaignObjective?.replace('OUTCOME_', '')}</span>
+                    </div>
+                  ) : null;
+                })()}
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Ad Sets</span>
+                  <span className="font-bold">{adSets.length}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Total Ads</span>
+                  <span className="font-bold">{adSets.reduce((sum, s) => sum + s.ads.length, 0)}</span>
+                </div>
+              </div>
+
+              {/* Ad sets breakdown */}
+              <div className="border-t border-border/30 pt-2 space-y-1.5">
+                {adSets.map((adSet, i) => (
+                  <div key={adSet.id} className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span className="truncate">{adSet.name || `Ad Set ${i + 1}`}</span>
+                    <span className="shrink-0 ml-2">{adSet.ads.length} ad{adSet.ads.length !== 1 ? 's' : ''}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <p className="text-xs text-muted-foreground">Please don't close this window</p>
+          </div>
+        </div>
+      )}
 
       {/* Template create/edit slide-over */}
       <Sheet open={templateSheet !== null} onOpenChange={(open) => { if (!open) setTemplateSheet(null); }}>

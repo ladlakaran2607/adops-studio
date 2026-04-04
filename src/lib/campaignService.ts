@@ -3,7 +3,7 @@
  * Now runs in the browser. Calls Meta API via meta-proxy (access token stays server-side).
  * Saves results to Supabase via the frontend client (through RLS).
  */
-import { metaPost } from './metaApi';
+import { metaPost, metaGet } from './metaApi';
 import { supabase } from '@/integrations/supabase/client';
 import type { GeoLocationEntry } from '@/types/templates';
 
@@ -155,7 +155,15 @@ function buildTargetingSpec(
 }
 
 // ── Derivation helpers ──
-function deriveOptimizationGoal(objective: string, conversionLocation?: string): string {
+function deriveOptimizationGoal(objective: string, conversionLocation?: string, templateOptimization?: string): string {
+  // Direct mapping from template optimization goal if explicitly set
+  if (templateOptimization === 'Lead Generation') return 'LEAD_GENERATION';
+  if (templateOptimization === 'Link Clicks') return 'LINK_CLICKS';
+  if (templateOptimization === 'Reach') return 'REACH';
+  if (templateOptimization === 'Impressions') return 'IMPRESSIONS';
+  if (templateOptimization === 'Landing Page Views') return 'LANDING_PAGE_VIEWS';
+  if (templateOptimization === 'Value') return 'VALUE';
+  // Fallback: derive from campaign objective + conversion location
   if (objective === 'OUTCOME_SALES') return 'OFFSITE_CONVERSIONS';
   if (objective === 'OUTCOME_LEADS' && conversionLocation === 'On Ad') return 'LEAD_GENERATION';
   if (objective === 'OUTCOME_LEADS') return 'OFFSITE_CONVERSIONS';
@@ -548,7 +556,31 @@ async function uploadVideoToMeta(accountId: string, videoUrl: string): Promise<s
   });
   if (res.error) throw new Error(`Video upload failed: ${res.error.error_user_msg || res.error.message}`);
   if (!res.id) throw new Error('No video ID returned from Meta');
-  return res.id;
+
+  // Poll until video is ready (Meta needs time to process)
+  const videoId = res.id;
+  const maxAttempts = 20;
+  const pollInterval = 3000; // 3 seconds
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
+    try {
+      const statusRes = await metaGet(accountId, `${videoId}?fields=status`);
+      const videoStatus = statusRes.status?.video_status;
+      console.log(`[Video Status] ${videoId}: ${videoStatus} (attempt ${attempt + 1}/${maxAttempts})`);
+
+      if (videoStatus === 'ready') return videoId;
+      if (videoStatus === 'error') throw new Error('Video processing failed on Meta');
+    } catch (err) {
+      // If the status check fails, the video might still be processing — continue polling
+      if ((err as Error).message === 'Video processing failed on Meta') throw err;
+      console.warn(`[Video Status] Poll attempt ${attempt + 1} failed, retrying...`);
+    }
+  }
+
+  // If we've waited ~60 seconds and still not ready, proceed anyway — Meta might accept it
+  console.warn(`[Video Status] ${videoId}: Timed out waiting for ready status, proceeding anyway`);
+  return videoId;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -812,7 +844,7 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
       adSetResult.status = 'EXISTING';
     } else {
       const objective = campaign?.objective || 'OUTCOME_SALES';
-      const optimizationGoal = deriveOptimizationGoal(objective, convLoc);
+      const optimizationGoal = deriveOptimizationGoal(objective, convLoc, tf.optimization);
       const promotedObject = derivePromotedObject(objective, convLoc, tf.pixelId || tf.pixel_id || pixel_id, page_id);
 
       const targeting = buildTargetingSpec(
@@ -870,18 +902,13 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
       const hasAnyStoryVariant = (adSetInput.ads || []).some(
         (ad: AdInput) => !!ad.story_image_url || (ad.carousel_cards || []).some((c: AdInput) => !!c.story_image_url)
       );
-      const hasMultiText = (adSetInput.ads || []).some((ad: AdInput) => {
-        const headlines = (ad.headlines || []).filter((h: string) => h.trim());
-        const texts = (ad.primary_texts || []).filter((t: string) => t.trim());
-        return headlines.length > 1 || texts.length > 1;
-      });
+      // Dynamic creative: only set when explicitly enabled in template
+      // Multi-text without dynamic creative uses asset_feed_spec with optimization_type: PLACEMENT
       const wantsDynamicCreative = !!(tf.dynamicCreative || tf.dynamic_creative);
+      const useDynamicCreative = wantsDynamicCreative && !hasAnyStoryVariant;
 
-      if (!hasAnyStoryVariant) {
-        // No story variants → safe to use dynamic creative
-        if (wantsDynamicCreative || hasMultiText) {
-          adsetParams.is_dynamic_creative = true;
-        }
+      if (useDynamicCreative) {
+        adsetParams.is_dynamic_creative = true;
       }
       // When story variants exist, we skip is_dynamic_creative entirely
       // — asset_feed_spec with optimization_type: PLACEMENT handles multi-text via shared adlabels

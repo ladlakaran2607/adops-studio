@@ -259,14 +259,19 @@ See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the full production deployment guide:
 - Creative section redesign: pill toggle for Image/Video/Carousel with icons, Multi-Variant toggle in a muted container, 9:16 Story enabled badge
 
 **Creative & Media**
+- Three creative types supported: Single Image, Single Video, Carousel — switchable via pill toggle
 - Cloudinary signed upload for images and videos (API secret never touches browser)
 - Automatic 9:16 story variant generation via Cloudinary URL transforms: AI Gen Fill + Face Crop
 - Manual story image upload with Cloudinary upload (proper HTTPS URLs, not blob)
 - Delete button on individual story variant thumbnails (hover to reveal)
 - Multi-Variant toggle: when ON, enables story placement optimization via `asset_feed_spec`
 - URL tab for pasting image/video URLs directly (applies on Enter or blur)
-- Carousel: add/remove cards, bulk upload images, per-card title + URL + image
-- Video: upload with thumbnail URL, blob preview → Cloudinary HTTPS URL
+- Carousel: add/remove cards, bulk upload multiple images at once, per-card title + URL + image
+- Video ads: upload video via Cloudinary or paste URL, thumbnail URL support, blob preview → HTTPS URL
+- Video uploaded to Meta media library first (`advideos` endpoint) → `video_id` used in creative spec
+- Video creative supports both simple mode (`object_story_spec.video_data`) and multi-text mode (`asset_feed_spec` with `SINGLE_VIDEO` format)
+- Multi-text video: multiple headlines/primary texts with platform-specific labels for Facebook and Instagram placement optimization
+- Lead generation video ads: `call_to_action.value` includes `lead_gen_form_id` + `link: http://fb.me/`
 
 **Campaign Launch Logic**
 - Smart creative dispatch: automatically selects the right Meta API format based on creative type + story variants + text count (10 combinations handled)

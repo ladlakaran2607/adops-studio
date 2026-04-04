@@ -10,7 +10,7 @@ import { ArrowLeft, Save } from 'lucide-react';
 import type { AdsetTemplate, PlacementOptions } from '@/types/templates';
 import { LocationPicker } from './LocationPicker';
 
-const optimizations = ['Conversions', 'Landing Page Views', 'Link Clicks', 'Impressions', 'Reach', 'Value'];
+const optimizations = ['Conversions', 'Lead Generation', 'Landing Page Views', 'Link Clicks', 'Impressions', 'Reach', 'Value'];
 const conversionLocations = ['Website', 'App', 'Messaging', 'Calls', 'Website and App', 'On Ad'];
 const performanceGoals = ['Maximize number of conversions', 'Maximize value of conversions', 'Maximize number of landing page views', 'Maximize number of link clicks', 'Maximize reach of ads', 'Maximize number of impressions'];
 const conversionEvents = ['Purchase', 'Add to Cart', 'Lead', 'Complete Registration', 'View Content', 'Initiate Checkout', 'Add Payment Info', 'Search', 'Contact', 'Subscribe', 'Start Trial'];
