@@ -220,3 +220,96 @@ See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the full production deployment guide:
 - DNS setup, hosting, environment variables
 - Code changes needed (one file per app)
 - Production launch checklist
+
+---
+
+## Features & Value Delivered
+
+### UX/UI Redesign (Stitch Mockup-Matched)
+
+**Global**
+- Consistent golden theme matching BrandPeak brand identity
+- Inter (body) + Space Grotesk (headings) typography system with antialiased rendering
+- Responsive layouts — all pages fill available width on any screen size
+- Smooth animations throughout (fadeIn, slideUp, scaleIn transitions)
+- Dark toast notifications with color-coded types: green (success), red (error), amber (warning)
+- Sticky headers on every page with backdrop blur
+- Sidebar with brand identity, 4-page navigation, and golden active-state indicator
+
+**Templates Page**
+- 5 organized tabs: Campaigns, Ad Sets, Ads, Advantage+ Creative, Rules
+- Golden underline tab bar with count badges
+- Template cards with icon, detail pills, and always-visible Edit/Duplicate/Delete actions
+- Delete confirmation dialog to prevent accidental deletions
+- Slide-over panel (Sheet) for template editing — no page navigation, stay in context
+- "New Template" golden gradient button in page header
+- Enhanced empty states with illustration and actionable CTA buttons
+
+**Campaign Builder**
+- Sticky readiness checklist sidebar — always visible while scrolling, shows completion status (e.g., 5/8 complete) with green/amber indicators per item
+- Live campaign summary — shows campaign name, objective, budget, ad set targeting details, and ad creative types updating in real-time as user fills fields
+- Start Campaign button in sticky sidebar — disabled until all readiness items are complete, golden gradient with rocket icon
+- Collapsible ad sets — click to expand/collapse, shows name + template badge + ad count when collapsed
+- Pill toggle selectors for New/Existing (campaign type, ad set type) — replaces radio buttons
+- Template create/edit shortcuts (+/pencil icons) on ALL 4 template types (Campaign, Ad Set, Ad, Advantage+) — opens slide-over panel directly from the builder without navigating away
+- Full template forms in the slide-over — same forms as the Templates page, not simplified versions
+- Collapsible Document Import with "How it works" guide + Additional Instructions textarea (2/3 + 1/3 layout)
+- Numbered golden section labels (① Campaign Setup, ② Ad Sets & Ads) with ad set count
+- Quick Tip card in sidebar with contextual advice
+- Creative section redesign: pill toggle for Image/Video/Carousel with icons, Multi-Variant toggle in a muted container, 9:16 Story enabled badge
+
+**Creative & Media**
+- Cloudinary signed upload for images and videos (API secret never touches browser)
+- Automatic 9:16 story variant generation via Cloudinary URL transforms: AI Gen Fill + Face Crop
+- Manual story image upload with Cloudinary upload (proper HTTPS URLs, not blob)
+- Delete button on individual story variant thumbnails (hover to reveal)
+- Multi-Variant toggle: when ON, enables story placement optimization via `asset_feed_spec`
+- URL tab for pasting image/video URLs directly (applies on Enter or blur)
+- Carousel: add/remove cards, bulk upload images, per-card title + URL + image
+- Video: upload with thumbnail URL, blob preview → Cloudinary HTTPS URL
+
+**Campaign Launch Logic**
+- Smart creative dispatch: automatically selects the right Meta API format based on creative type + story variants + text count (10 combinations handled)
+- Multi-text without Dynamic Creative: when multi-variant is ON, asset_feed_spec handles multiple headlines/texts via shared adlabels — no Dynamic Creative required. When multi-variant is OFF, auto-enables `is_dynamic_creative: true`
+- Advantage+ Creative: maps individual template toggles to Meta API feature keys (`image_touchups`, `text_optimizations`, `image_animation`, etc.)
+- CBO ON/OFF handling: budget + bid at correct level (campaign vs ad set), bid_amount passed to both levels when required
+- All 4 bid strategies supported: Lowest Cost, Bid Cap, Cost Cap, Minimum ROAS — with bid amount fields shown conditionally
+- Targeting automation: `advantage_audience: 0` set by default (Meta v22.0 requirement)
+- Lead ad support: lead form ID passed correctly for On Ad conversion, `http://fb.me/` link for lead CTAs
+- Location targeting: countries, cities (with radius + distance unit), and regions — all via Meta geo search API
+- Attribution spec parsing: `7d_click_1d_view`, `1d_click`, `28d_click_1d_view` etc.
+- DSA compliance: `dsa_beneficiary` and `dsa_payor` auto-set from page_id
+- Pre-launch validation: all required fields checked, blob URLs blocked, story variants verified, Dynamic Creative constraints enforced
+- Partial failure handling: campaign + ad sets created even if some ads fail, errors shown per-item
+
+**Ads Processing (AI Bulk Edit)**
+- Redesigned filter card with dark "Load Ads" button and clean filter grid
+- Golden-bordered AI Bulk Edit panel with sparkle icon and chevron toggle
+- Always-visible AI button (disabled when no ads selected, with helper text)
+- Strikethrough + green suggestion diff display per headline/body/description
+- Individual item labels: "Body 1", "Body 2", "Headline 1" etc. clearly separated
+- Per-field revert button — hover to reveal undo icon, reverts individual suggestion to original
+- Per-field edit button — click suggestion text to edit inline
+- Collapsible ad cards with collapse toggle per card
+- "Collapse unselected", "Collapse all", "Expand all" controls in Select All row
+- Fixed dark "Push to Meta" bar at bottom with discard option
+- Nudge banner for empty state (shows before and after account selection)
+- Colored badges: IMAGE (blue), VIDEO (slate), ACTIVE (green), PAUSED (amber), MODIFIED (amber)
+
+**Bulk Uploader**
+- Account selector + "Load Ads & Ad Sets" in sticky header
+- 60/40 grid layout matching Stitch mockup
+- Campaign name shown per ad (via updated `meta-fetch-ads` edge function with `campaign{id,name}`)
+- Search filters: ads by name/ID/headline/campaign, ad sets by name/campaign
+- Execution Plan card: shows selected ads, target ad sets, total new entities, and explanation text
+- Dark "Duplicate X Ads to Y Ad Sets" button with rocket icon
+- Guidance banner with different messages based on state (no account vs account selected vs data loaded)
+- Selections auto-cleared after successful duplication
+
+**Infrastructure**
+- 8 edge functions deployed (meta-proxy, meta-fetch-ads, meta-fetch-adsets, meta-bulk-duplicate, meta-fetch-leadforms, ai-bulk-edit, cloudinary-sign, meta-validate-token)
+- `meta-fetch-ads` updated to return campaign name per ad
+- `CampaignTemplates` table extended with `bidAmount` column
+- All campaign/adset/ad data saved to Supabase after Meta creation
+- Error logging to `ErrorLogs` table
+- JWT token refresh with expiry checking

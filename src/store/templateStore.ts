@@ -46,7 +46,7 @@ const defaultCatalogEnhancements: CatalogEnhancements = {
 export function createEmptyCampaignTemplate(): Omit<CampaignTemplate, 'id' | 'createdAt'> {
   return {
     name: '', campaignObjective: '', buyingType: 'AUCTION', bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
-    advantagePlusCatalog: false, catalogId: '', advantageCampaignBudget: false,
+    bidAmount: null, advantagePlusCatalog: false, catalogId: '', advantageCampaignBudget: false,
     campaignBudgetType: 'Daily', campaignBudgetValue: null, abTest: false,
     specialAdCategories: [], spendCap: null, campaignStatus: 'PAUSED',
     isAdsetBudgetSharing: false,
@@ -99,6 +99,7 @@ function mapCampaignFromDb(row: Record<string, unknown>): CampaignTemplate {
     campaignObjective: row.campaignObjective as string,
     buyingType: row.buyingType as string,
     bidStrategy: row.bidStrategy as string,
+    bidAmount: row.bidAmount as number | null,
     advantagePlusCatalog: row.advantagePlusCatalog as boolean,
     catalogId: (row.catalogId as string) || '',
     advantageCampaignBudget: row.advantageCampaignBudget as boolean,
@@ -119,6 +120,7 @@ function mapCampaignToDb(t: Partial<CampaignTemplate>) {
   if (t.campaignObjective !== undefined) m.campaignObjective = t.campaignObjective;
   if (t.buyingType !== undefined) m.buyingType = t.buyingType;
   if (t.bidStrategy !== undefined) m.bidStrategy = t.bidStrategy;
+  if (t.bidAmount !== undefined) m.bidAmount = t.bidAmount;
   if (t.advantagePlusCatalog !== undefined) m.advantagePlusCatalog = t.advantagePlusCatalog;
   if (t.catalogId !== undefined) m.catalogId = t.catalogId;
   if (t.advantageCampaignBudget !== undefined) m.advantageCampaignBudget = t.advantageCampaignBudget;

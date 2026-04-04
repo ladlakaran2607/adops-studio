@@ -143,19 +143,32 @@ export function CampaignTemplateForm({ template, onSave, onCancel }: Props) {
           </div>
 
           {form.advantageCampaignBudget && (
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label>Budget Type</Label>
-                <Select value={form.campaignBudgetType} onValueChange={v => set('campaignBudgetType', v)}>
-                  <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
-                  <SelectContent>{budgetTypes.map(b => <SelectItem key={b} value={b}>{b}</SelectItem>)}</SelectContent>
-                </Select>
+            <>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label>Budget Type</Label>
+                  <Select value={form.campaignBudgetType} onValueChange={v => set('campaignBudgetType', v)}>
+                    <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
+                    <SelectContent>{budgetTypes.map(b => <SelectItem key={b} value={b}>{b}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Budget Value (€)</Label>
+                  <Input type="number" value={form.campaignBudgetValue ?? ''} onChange={e => set('campaignBudgetValue', e.target.value ? Number(e.target.value) : null)} placeholder="5.00" className="mt-1.5" />
+                </div>
               </div>
-              <div>
-                <Label>Budget Value (€)</Label>
-                <Input type="number" value={form.campaignBudgetValue ?? ''} onChange={e => set('campaignBudgetValue', e.target.value ? Number(e.target.value) : null)} placeholder="5.00" className="mt-1.5" />
-              </div>
-            </div>
+              {(form.bidStrategy === 'LOWEST_COST_WITH_BID_CAP' || form.bidStrategy === 'COST_CAP') && (
+                <div>
+                  <Label>Bid Amount (€)</Label>
+                  <Input type="number" value={form.bidAmount ?? ''} onChange={e => set('bidAmount', e.target.value ? Number(e.target.value) : null)} placeholder="Maximum bid per auction" className="mt-1.5" />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {form.bidStrategy === 'LOWEST_COST_WITH_BID_CAP'
+                      ? 'Maximum amount Meta will bid in any single auction.'
+                      : 'Target average cost per result. Meta may exceed this temporarily.'}
+                  </p>
+                </div>
+              )}
+            </>
           )}
 
           <div>

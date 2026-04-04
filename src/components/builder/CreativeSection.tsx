@@ -606,7 +606,7 @@ export function CreativeSection({ data, onChange }: CreativeSectionProps) {
 
     if (cloudinaryConfigured) {
       setIsBulkUploading(true);
-      toast.info(`Uploading ${files.length} image(s) to Cloudinary...`);
+      toast.success(`Uploading ${files.length} image(s) to Cloudinary...`);
       try {
         const results = await Promise.allSettled(
           files.map(file => uploadToCloudinary(file))

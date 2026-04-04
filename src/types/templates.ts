@@ -14,6 +14,7 @@ export interface CampaignTemplate {
   campaignObjective: string;
   buyingType: string;
   bidStrategy: string;
+  bidAmount: number | null;
   advantagePlusCatalog: boolean;
   catalogId: string;
   advantageCampaignBudget: boolean;

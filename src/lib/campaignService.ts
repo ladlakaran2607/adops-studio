@@ -130,6 +130,9 @@ function buildTargetingSpec(
   if (opts.targetGender === 'Male') targeting.genders = [1];
   else if (opts.targetGender === 'Female') targeting.genders = [2];
 
+  // Meta v22.0 requires advantage_audience to be explicitly set
+  targeting.targeting_automation = { advantage_audience: 0 };
+
   if (placements === 'Manual' && placementOptions) {
     const platforms: Record<string, string[]> = {};
     for (const [key, enabled] of Object.entries(placementOptions)) {
@@ -754,6 +757,9 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
         campaignParams.lifetime_budget = Math.round(campaign.campaign_budget_value * 100);
       }
       if (campaign.bid_strategy) campaignParams.bid_strategy = campaign.bid_strategy;
+      if (campaign.bid_amount && (campaign.bid_strategy === 'LOWEST_COST_WITH_BID_CAP' || campaign.bid_strategy === 'COST_CAP')) {
+        campaignParams.bid_amount = Math.round(campaign.bid_amount * 100);
+      }
     }
 
     const campaignRes = await metaPost(account_id, `act_${account_id}/campaigns`, campaignParams);
@@ -826,8 +832,9 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
 
       if (promotedObject) adsetParams.promoted_object = promotedObject;
 
-      // Budget (only if CBO OFF)
+      // Budget & bid strategy
       if (!campaign?.advantage_campaign_budget) {
+        // CBO OFF — budget + bid at ad set level
         const bidStrategy = tf.bidStrategy || tf.bid_strategy;
         if (bidStrategy) adsetParams.bid_strategy = bidStrategy;
         const bidAmount = tf.bidAmount || tf.bid_amount;
@@ -840,6 +847,13 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
           if (budgetType === 'Daily') adsetParams.daily_budget = Math.round(budgetValue * 100);
           else adsetParams.lifetime_budget = Math.round(budgetValue * 100);
         }
+      } else {
+        // CBO ON — bid_amount still required at ad set level for Cost Cap / Bid Cap
+        const campaignBidStrategy = campaign.bid_strategy;
+        const campaignBidAmount = campaign.bid_amount;
+        if (campaignBidAmount && (campaignBidStrategy === 'LOWEST_COST_WITH_BID_CAP' || campaignBidStrategy === 'COST_CAP')) {
+          adsetParams.bid_amount = Math.round(campaignBidAmount * 100);
+        }
       }
 
       // Attribution spec
@@ -847,15 +861,30 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
         adsetParams.attribution_spec = parseAttributionSetting(tf.attributionSetting || tf.attribution_setting);
       }
 
-      // Dynamic creative conflicts with placement optimization (asset_customization_rules).
-      // If any ad has story variants, we need placement rules → disable dynamic creative.
-      const wantsDynamicCreative = !!(tf.dynamicCreative || tf.dynamic_creative);
+      // Dynamic creative logic:
+      // 1. If multi-variant (story variants) → use asset_feed_spec with placement optimization.
+      //    is_dynamic_creative must NOT be set (conflicts with asset_customization_rules).
+      // 2. If no story variants but multiple texts → auto-enable is_dynamic_creative
+      //    so Meta can rotate text variants.
+      // 3. If explicitly set in template and no story variants → respect the template setting.
       const hasAnyStoryVariant = (adSetInput.ads || []).some(
         (ad: AdInput) => !!ad.story_image_url || (ad.carousel_cards || []).some((c: AdInput) => !!c.story_image_url)
       );
-      if (wantsDynamicCreative && !hasAnyStoryVariant) {
-        adsetParams.is_dynamic_creative = true;
+      const hasMultiText = (adSetInput.ads || []).some((ad: AdInput) => {
+        const headlines = (ad.headlines || []).filter((h: string) => h.trim());
+        const texts = (ad.primary_texts || []).filter((t: string) => t.trim());
+        return headlines.length > 1 || texts.length > 1;
+      });
+      const wantsDynamicCreative = !!(tf.dynamicCreative || tf.dynamic_creative);
+
+      if (!hasAnyStoryVariant) {
+        // No story variants → safe to use dynamic creative
+        if (wantsDynamicCreative || hasMultiText) {
+          adsetParams.is_dynamic_creative = true;
+        }
       }
+      // When story variants exist, we skip is_dynamic_creative entirely
+      // — asset_feed_spec with optimization_type: PLACEMENT handles multi-text via shared adlabels
       if (tf.startDate || tf.start_date) adsetParams.start_time = tf.startDate || tf.start_date;
       if ((tf.setEndDate || tf.set_end_date) && (tf.endDate || tf.end_date)) {
         adsetParams.end_time = tf.endDate || tf.end_date;

@@ -331,17 +331,11 @@ export default function CampaignBuilder() {
           toast.error(`"${adSet.name}" has Dynamic Creative enabled but contains ${adSet.ads.length} ads. Meta allows only 1 ad per dynamic creative ad set. Remove extra ads or disable Dynamic Creative on the adset template.`);
           return;
         }
-      } else {
-        // Multiple headlines/texts require dynamic creative
-        for (const ad of adSet.ads) {
-          const multiHeadlines = ad.headlines.filter(h => h.trim()).length > 1;
-          const multiTexts = ad.primaryTexts.filter(t => t.trim()).length > 1;
-          if (multiHeadlines || multiTexts) {
-            toast.error(`Ad "${ad.name}" in "${adSet.name}" has multiple headlines/texts but the adset template doesn't have Dynamic Creative enabled. Enable it in the template or use only 1 headline and 1 primary text per ad.`);
-            return;
-          }
-        }
       }
+      // Note: Multi-text without Dynamic Creative is allowed when multi-variant is ON
+      // (asset_feed_spec handles multiple texts via shared adlabels + placement optimization).
+      // When multi-variant is OFF and multi-text exists, is_dynamic_creative will be auto-set
+      // in campaignService.ts based on the ad content.
     }
 
     setIsLaunching(true);
@@ -365,6 +359,7 @@ export default function CampaignBuilder() {
           objective: campaignTemplate.campaignObjective,
           buying_type: campaignTemplate.buyingType,
           bid_strategy: campaignTemplate.bidStrategy,
+          bid_amount: campaignTemplate.bidAmount,
           advantage_campaign_budget: campaignTemplate.advantageCampaignBudget,
           campaign_budget_type: campaignTemplate.campaignBudgetType,
           campaign_budget_value: campaignTemplate.campaignBudgetValue,
@@ -434,10 +429,25 @@ export default function CampaignBuilder() {
                     )?.url || null,
                   }))
                 : [],
-              advantage_creative_config: advantageTemplate ? {
-                image_enhancements: advantageTemplate.imageEnhancements,
-                video_enhancements: advantageTemplate.videoEnhancements,
-              } : null,
+              advantage_creative_config: advantageTemplate ? (() => {
+                const img = advantageTemplate.imageEnhancements;
+                const vid = advantageTemplate.videoEnhancements;
+                const features: Record<string, { enroll_status: string }> = {};
+                // Map template toggles → Meta API individual feature keys
+                if (img?.visualTouchups) features.image_touchups = { enroll_status: 'OPT_IN' };
+                if (img?.textImprovements) features.text_optimizations = { enroll_status: 'OPT_IN' };
+                if (img?.imageAnimation) features.image_animation = { enroll_status: 'OPT_IN' };
+                if (img?.music) features.music_generation = { enroll_status: 'OPT_IN' };
+                if (img?.enhanceCta) features.generate_cta = { enroll_status: 'OPT_IN' };
+                if (img?.addOverlays) features.add_text_overlay = { enroll_status: 'OPT_IN' };
+                if (img?.expandImage) features.image_background_gen = { enroll_status: 'OPT_IN' };
+                if (img?.textTranslation) features.text_translation = { enroll_status: 'OPT_IN' };
+                if (img?.relevantComments) features.inline_comment = { enroll_status: 'OPT_IN' };
+                if (vid?.videoEffects) features.video_highlights = { enroll_status: 'OPT_IN' };
+                if (vid?.videoToImage) features.video_to_image = { enroll_status: 'OPT_IN' };
+                if (vid?.textTranslation) features.text_translation = { enroll_status: 'OPT_IN' };
+                return Object.keys(features).length > 0 ? features : null;
+              })() : null,
             };
           }),
         };
