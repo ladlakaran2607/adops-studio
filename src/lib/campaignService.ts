@@ -319,10 +319,12 @@ function buildAssetFeedImageCreative(ad: AdInput, ctx: CreativeCtx): Record<stri
   }
 
   // ── Titles & Bodies ──
-  // All variants share the same adlabel so every placement rule uses ALL of them
+  // All variants share the same adlabel so every placement rule uses ALL of them.
+  // Titles MUST be labeled when there are multiple variants + placement rules, otherwise
+  // Meta rejects with "Multiple titles assets cannot be applied to rule no. N".
   const titles = headlines.map((t: string) => {
     const entry: Record<string, unknown> = { text: t };
-    if (usePlacementRules && !isLeadAd) entry.adlabels = [{ name: 'title_var_1' }];
+    if (usePlacementRules) entry.adlabels = [{ name: 'title_var_1' }];
     return entry;
   });
 
@@ -355,6 +357,7 @@ function buildAssetFeedImageCreative(ad: AdInput, ctx: CreativeCtx): Record<stri
   if (usePlacementRules) {
     const feedRule: Record<string, unknown> = {
       image_label: { name: 'feed_image' },
+      title_label: { name: 'title_var_1' },
       body_label: { name: 'body_var_1' },
       customization_spec: {
         publisher_platforms: ['facebook', 'instagram'],
@@ -362,10 +365,10 @@ function buildAssetFeedImageCreative(ad: AdInput, ctx: CreativeCtx): Record<stri
         instagram_positions: ['stream', 'explore', 'explore_home'],
       },
     };
-    if (!isLeadAd) feedRule.title_label = { name: 'title_var_1' };
 
     const storyRule: Record<string, unknown> = {
       image_label: { name: 'story_image' },
+      title_label: { name: 'title_var_1' },
       body_label: { name: 'body_var_1' },
       customization_spec: {
         publisher_platforms: ['facebook', 'instagram'],
@@ -373,7 +376,6 @@ function buildAssetFeedImageCreative(ad: AdInput, ctx: CreativeCtx): Record<stri
         instagram_positions: ['story', 'reels'],
       },
     };
-    if (!isLeadAd) storyRule.title_label = { name: 'title_var_1' };
 
     assetFeedSpec.asset_customization_rules = [feedRule, storyRule];
     assetFeedSpec.optimization_type = 'PLACEMENT';

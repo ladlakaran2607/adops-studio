@@ -20,7 +20,7 @@ import { DocumentImport, type ParsedDocument } from '@/components/builder/Docume
 import { AITemplateRecommender } from '@/components/builder/AITemplateRecommender';
 import { launchCampaign, type LaunchResult } from '@/lib/campaignService';
 import { useAuth } from '@/contexts/AuthContext';
-import { useAdAccounts } from '@/hooks/useAdAccounts';
+import { useAdAccounts, getMissingAccountFields } from '@/hooks/useAdAccounts';
 import { useLeadForms } from '@/hooks/useLeadForms';
 import { toast } from 'sonner';
 
@@ -214,6 +214,8 @@ export default function CampaignBuilder() {
   const { organizationId } = useAuth();
   const { data: adAccounts } = useAdAccounts();
   const selectedAccount = adAccounts?.find(a => a.accountId === accountId);
+  const missingAccountFields = getMissingAccountFields(selectedAccount);
+  const isAccountIncomplete = !!selectedAccount && missingAccountFields.length > 0;
   const { data: leadForms, isLoading: leadFormsLoading } = useLeadForms(accountId, selectedAccount?.pageId);
 
   const campaignStore = useTemplateStore<CampaignTemplate>('campaign-templates');
@@ -360,6 +362,10 @@ export default function CampaignBuilder() {
   const handleStartCampaign = async () => {
     // Validation
     if (!accountId) { toast.error('Please select an ad account'); return; }
+    if (isAccountIncomplete) {
+      toast.error(`This account is missing: ${missingAccountFields.join(', ')}. Configure it in the main app before launching.`);
+      return;
+    }
     if (campaignType === 'new' && !campaignName.trim()) { toast.error('Please enter a campaign name'); return; }
     if (campaignType === 'existing' && !existingCampaignId.trim()) { toast.error('Please enter an existing campaign ID'); return; }
     if (campaignType === 'new' && !campaignTemplateId) { toast.error('Please select a campaign template'); return; }
@@ -719,6 +725,14 @@ export default function CampaignBuilder() {
   // --- Readiness checklist computation ---
   const readinessItems: { label: string; done: boolean }[] = [];
   readinessItems.push({ label: 'Account selected', done: !!accountId });
+  if (selectedAccount) {
+    readinessItems.push({
+      label: isAccountIncomplete
+        ? `Account missing: ${missingAccountFields.join(', ')}`
+        : 'Account fully configured',
+      done: !isAccountIncomplete,
+    });
+  }
   readinessItems.push({ label: 'Campaign name', done: !!campaignName.trim() });
   if (campaignType === 'new') {
     readinessItems.push({ label: 'Campaign template', done: !!campaignTemplateId });
@@ -824,7 +838,7 @@ export default function CampaignBuilder() {
           <CardContent className="space-y-4">
             <div className="grid grid-cols-2 gap-6">
               <AccountSelector value={accountId} onChange={setAccountId} />
-              <div>
+              <div className={cn('transition-opacity', isAccountIncomplete && 'pointer-events-none opacity-40')}>
                 <Label className="text-xs text-muted-foreground uppercase font-medium">Campaign Type</Label>
                 <div className="flex mt-2 bg-muted rounded-xl p-1">
                   <button
@@ -857,6 +871,32 @@ export default function CampaignBuilder() {
               </div>
             </div>
 
+            {isAccountIncomplete && (
+              <div className="rounded-xl border border-destructive/40 bg-destructive/5 p-4 animate-fade-in">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-destructive">Account setup incomplete</p>
+                    <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                      <span className="font-semibold text-foreground">{selectedAccount?.name}</span> cannot be used to launch campaigns until the following fields are configured on the ad account:
+                    </p>
+                    <ul className="mt-2 space-y-1">
+                      {missingAccountFields.map(field => (
+                        <li key={field} className="flex items-center gap-2 text-xs">
+                          <span className="w-1 h-1 rounded-full bg-destructive" />
+                          <span className="font-mono text-destructive">{field}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="text-[11px] text-muted-foreground mt-3 leading-relaxed">
+                      Add these fields in the main app's ad account settings, then reload this page. All campaign fields below are locked until the setup is complete.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className={cn('space-y-4 transition-opacity', isAccountIncomplete && 'pointer-events-none opacity-40 select-none')}>
             {campaignType === 'new' ? (
               <>
                 <div className="grid grid-cols-2 gap-4">
@@ -908,11 +948,12 @@ export default function CampaignBuilder() {
                 <p className="text-xs text-muted-foreground mt-1">The ID of the existing campaign in Meta</p>
               </div>
             )}
+            </div>
           </CardContent>
         </Card>
 
         {/* 2. Ad Sets & Ads */}
-        <div>
+        <div className={cn('transition-opacity', isAccountIncomplete && 'pointer-events-none opacity-40 select-none')}>
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
               <div className="w-7 h-7 rounded-full bg-primary text-primary-foreground text-xs font-bold flex items-center justify-center">2</div>

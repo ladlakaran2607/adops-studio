@@ -25,6 +25,9 @@ design-reference/
 # Claude Code local context (not for commit)
 CLAUDE.md
 
+# Deployment notes (local reference only)
+DEPLOYMENT.md
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

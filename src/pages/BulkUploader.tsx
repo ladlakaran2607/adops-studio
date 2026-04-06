@@ -5,9 +5,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { AccountSelector } from '@/components/shared/AccountSelector';
+import { useAdAccounts, getMissingAccountFields } from '@/hooks/useAdAccounts';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
-  Rocket, Copy, X, Search, RefreshCw, Image, Film, LayoutGrid, Check, Info, ClipboardList,
+  Rocket, Copy, X, Search, RefreshCw, Image, Film, LayoutGrid, Check, Info, ClipboardList, AlertTriangle,
 } from 'lucide-react';
 import { invokeEdgeFunction } from '@/lib/edgeFunctions';
 import { metaPost, metaGet } from '@/lib/metaApi';
@@ -72,6 +73,11 @@ const adTypeBadge = (type: string) => {
 export default function BulkUploader() {
   const [accountId, setAccountId] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  const { data: adAccounts } = useAdAccounts();
+  const selectedAccount = adAccounts?.find(a => a.accountId === accountId);
+  const missingAccountFields = getMissingAccountFields(selectedAccount);
+  const isAccountIncomplete = !!selectedAccount && missingAccountFields.length > 0;
 
   const [adSets, setAdSets] = useState<AdSet[]>([]);
   const [existingAds, setExistingAds] = useState<ExistingAd[]>([]);
@@ -432,6 +438,20 @@ export default function BulkUploader() {
                 : <>Click <strong>'Load Ads & Ad Sets'</strong> to fetch your campaigns.</>
               }
             </p>
+          </div>
+        )}
+
+        {isAccountIncomplete && (
+          <div className="mt-6 rounded-xl border border-amber-300 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 p-4 animate-fade-in">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-500 shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold text-amber-900 dark:text-amber-200">Account setup incomplete</p>
+                <p className="text-xs text-amber-900/80 dark:text-amber-200/80 mt-1 leading-relaxed">
+                  <span className="font-semibold">{selectedAccount?.name}</span> is missing <span className="font-mono">{missingAccountFields.join(', ')}</span>. Duplicated ads inherit the source ad's page and pixel, so this page will still work — but new campaigns cannot be launched from the Campaign Builder until these fields are configured in the main app.
+                </p>
+              </div>
+            </div>
           </div>
         )}
 

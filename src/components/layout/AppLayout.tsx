@@ -1,7 +1,8 @@
 import { ReactNode, useState, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
 import { cn } from '@/lib/utils';
-import { LayoutTemplate, Wrench, ScanSearch, Rocket, LogOut, Megaphone, PanelLeftClose, PanelLeft } from 'lucide-react';
+import { LayoutTemplate, Wrench, ScanSearch, Rocket, LogOut, PanelLeftClose, PanelLeft } from 'lucide-react';
+import { Logo } from '@/components/shared/Logo';
 import { useAuth } from '@/contexts/AuthContext';
 
 const navItems = [
@@ -46,9 +47,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
         {/* Brand + Toggle (same row when expanded, stacked when collapsed) */}
         <div className={cn('mb-8 flex', collapsed ? 'flex-col items-center gap-2 px-0' : 'items-center px-2')}>
           <div className={cn('flex items-center gap-3 min-w-0', collapsed && 'gap-0')}>
-            <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shrink-0">
-              <Megaphone className="w-4 h-4 text-primary-foreground" />
-            </div>
+            <Logo className="w-8 h-8 shrink-0" />
             <div className={cn('overflow-hidden transition-all duration-300', collapsed ? 'w-0 opacity-0' : 'w-auto opacity-100')}>
               <h1 className="text-lg font-bold text-foreground tracking-tight whitespace-nowrap">AdOps Studio</h1>
               <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-widest whitespace-nowrap">by BrandPeak</p>

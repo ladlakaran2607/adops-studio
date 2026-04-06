@@ -11,6 +11,25 @@ export interface AdAccount {
 }
 
 /**
+ * Fields required on an ad account before campaigns can be launched.
+ * `pageId` is spread into every creative's `object_story_spec` / `asset_feed_spec`,
+ * `pixelId` is required for SALES/LEADS objectives, and `instagramId` is needed
+ * for Instagram placements.
+ */
+export function getMissingAccountFields(account: AdAccount | undefined | null): string[] {
+  if (!account) return [];
+  const missing: string[] = [];
+  if (!account.pageId) missing.push('Facebook Page ID');
+  if (!account.pixelId) missing.push('Meta Pixel ID');
+  if (!account.instagramId) missing.push('Instagram Account ID');
+  return missing;
+}
+
+export function isAccountIncomplete(account: AdAccount | undefined | null): boolean {
+  return getMissingAccountFields(account).length > 0;
+}
+
+/**
  * Fetches ad accounts for the current user's organization (scoped by RLS).
  * Does NOT expose access_token — that stays server-side only.
  */

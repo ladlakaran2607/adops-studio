@@ -6,10 +6,11 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { RefreshCw, Sparkles, Check, X, ChevronDown, ChevronUp, Pencil, Download, CheckCircle2, Undo2, ChevronsUpDown, ChevronsDownUp } from 'lucide-react';
+import { RefreshCw, Sparkles, Check, X, ChevronDown, ChevronUp, Pencil, Download, CheckCircle2, Undo2, ChevronsUpDown, ChevronsDownUp, AlertTriangle } from 'lucide-react';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
 import { AccountSelector } from '@/components/shared/AccountSelector';
+import { useAdAccounts, getMissingAccountFields } from '@/hooks/useAdAccounts';
 import { invokeEdgeFunction } from '@/lib/edgeFunctions';
 import { metaPost, metaGet } from '@/lib/metaApi';
 import { toast } from 'sonner';
@@ -54,6 +55,10 @@ interface AiBulkEditResponse {
 
 export default function AdsProcessing() {
   const [accountId, setAccountId] = useState('');
+  const { data: adAccounts } = useAdAccounts();
+  const selectedAccount = adAccounts?.find(a => a.accountId === accountId);
+  const missingAccountFields = getMissingAccountFields(selectedAccount);
+  const isAccountIncomplete = !!selectedAccount && missingAccountFields.length > 0;
   const [headlineFilter, setHeadlineFilter] = useState('');
   const [bodyFilter, setBodyFilter] = useState('');
   const [adTypeFilter, setAdTypeFilter] = useState('all');
@@ -468,6 +473,20 @@ export default function AdsProcessing() {
                 Load Ads
               </Button>
             </div>
+
+            {isAccountIncomplete && (
+              <div className="mb-6 rounded-xl border border-amber-300 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 p-4 animate-fade-in">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-500 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-amber-900 dark:text-amber-200">Account setup incomplete</p>
+                    <p className="text-xs text-amber-900/80 dark:text-amber-200/80 mt-1 leading-relaxed">
+                      <span className="font-semibold">{selectedAccount?.name}</span> is missing <span className="font-mono">{missingAccountFields.join(', ')}</span>. You can still load and edit existing ads on this page, but new campaigns cannot be launched from the Campaign Builder until these fields are configured in the main app.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Filter inputs row */}
             <div className="grid grid-cols-12 gap-4">
