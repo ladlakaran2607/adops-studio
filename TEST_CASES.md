@@ -672,7 +672,109 @@ This summarizes which creative builder is used for each combination. Verify the 
 
 - **Supabase Project:** hhgiefigdttinexjdyca (Pro plan, EU region)
 - **Cloudinary Cloud:** dhaqo2jjl (AI add-on enabled)
-- **Dev Server:** localhost:8081
+- **Dev Server:** localhost:8080
 - **Meta API Version:** v22.0
 - **Browser:** Chrome (check console for `[Campaign Payload]`, `[Campaign Result]`, `[Campaign Errors]` logs)
 - **Edge Function Logs:** Supabase Dashboard → Edge Functions → select function → Logs
+
+---
+
+## 2026-04-06 — E2E Test Scenarios Executed
+
+9 combined scenarios covering sections 12-25. Each scenario tested multiple test cases simultaneously (template creation → campaign builder → Meta API launch → payload verification). All scenarios ran against the `1264516528094293` test ad account (INR currency).
+
+### Scenario 1 — Simple Single Image + Sales
+**Covers:** 12A, 15, 16 (full targeting), 17A, 19, 20, 24.1, 24B, 25.1
+
+- **Campaign Template `E2E Sales Template`:** `OUTCOME_SALES`, AUCTION, Lowest Cost, CBO OFF, PAUSED, `specialAdCategories: ['NONE']`
+- **Adset Template `E2E Sales NL 18-45`:** Conversions → Website → PURCHASE, Daily ₹200, Lowest Cost, Gender: All, Age: 18-45, Location: Netherlands, Automatic placements, `7d_click_1d_view` attribution, Dynamic Creative OFF
+- **Ad Template `E2E Image LearnMore`:** SINGLE_IMAGE, LEARN_MORE, url_tags `utm_source=facebook&utm_medium=cpc`, conversion domain `example.com`
+- **Campaign Builder:** New campaign → 1 ad set → 1 ad → 1 headline + 1 primary text → Image uploaded to Cloudinary → Multi-Variant OFF
+- **Result:** PASS — campaign + ad set + ad created, `object_story_spec.link_data.picture` verified
+
+### Scenario 2 — Multi-Variant Image + Advantage+ Creative + Awareness + Cost Cap CBO
+**Covers:** 11, 12B, 15, 16, 17B, 19, 24.3, 25.2, 25.16
+
+- **Campaign Template `E2E Awareness Template`:** `OUTCOME_AWARENESS`, **CBO ON**, Daily ₹200, **Cost Cap** with bid amount ₹50
+- **Adset Template `E2E Awareness BE Broad`:** Reach, Gender: Female, Age: 25-55, Location: Belgium, no adset-level budget (CBO covers it)
+- **Advantage+ Creative Template `E2E Advantage Safe Defaults`:** Image toggles — Advantage+ Creative ON, Visual Touch-ups ON, Text Improvements ON (mapped to Meta API keys: `image_touchups`, `text_optimizations`)
+- **Campaign Builder:** Ad with 2 headlines + 1 primary text → Image uploaded → **Multi-Variant ON** → 2 story variants auto-generated (AI Fill + Face Crop) → story variant selected
+- **Result:** PASS — `asset_feed_spec` with feed/story images, 2 titles, asset_customization_rules, `optimization_type: PLACEMENT`, `degrees_of_freedom_spec.creative_features_spec` with individual feature keys. Campaign-level `bid_strategy: COST_CAP` + `bid_amount: 5000` (cents)
+
+### Scenario 3 — Carousel + Advantage+ + Traffic with Manual Placements
+**Covers:** 14A, 15, 16, 17C, 19, 24.5, 25.4, 25.6
+
+- **Campaign Template `E2E Traffic Template`:** `OUTCOME_TRAFFIC`, CBO OFF, Lowest Cost
+- **Adset Template `E2E Traffic DE 18-65 Manual`:** Link Clicks, Gender: All, Age: 18-65, Location: Germany, Daily ₹200, **Manual Placements** (Facebook Feed + Instagram Feed + Instagram Stories enabled)
+- **Ad Template `E2E Carousel ShopNow`:** CAROUSEL, SHOP_NOW
+- **Campaign Builder:** Carousel → Multi-Variant OFF → 3 cards (Product A, B, C) — tested **Bulk Upload Visuals** (3 images uploaded in parallel to Cloudinary)
+- **Result:** PASS — `object_story_spec.link_data.child_attachments` with 3 cards, manual placements sent as `publisher_platforms`, `facebook_positions`, `instagram_positions`
+
+### Scenario 4 — Video Lead Ad (On Ad Form)
+**Covers:** 13A, 15, 16, 17E, 18, 24.9, 25.11
+
+- **Campaign Template `E2E Leads Template`:** `OUTCOME_LEADS`, CBO OFF, Lowest Cost
+- **Adset Template `E2E Leads OnAd NL`:** **Lead Generation** optimization, **Conversion Location: On Ad**, Gender: All, Age: 25-55, Netherlands, Daily ₹200
+- **Ad Template `E2E Video SignUp`:** SINGLE_VIDEO, SIGN_UP
+- **Campaign Builder:** Video uploaded via Cloudinary + thumbnail URL → 1 headline + 1 primary text → Lead form selected from dropdown (fetched from Meta page via `useLeadForms`)
+- **Result:** PASS — Video uploaded to Meta `advideos` → polled status until `ready` → `object_story_spec.video_data` with `video_id`, `image_url` (thumbnail), `call_to_action.value = { link: "http://fb.me/", lead_gen_form_id }`, `destination_type: ON_AD`, `optimization_goal: LEAD_GENERATION`, `promoted_object: { page_id }`
+
+### Scenario 5 — Multi-Text Video + Simple Image in One Campaign (CBO OFF Cost Cap)
+**Covers:** 13B, 16.17-16.18, 17F, 24.10, 25.8, 25.13, 25.17
+
+- **Campaign Template `E2E Sales CostCap`:** `OUTCOME_SALES`, CBO OFF
+- **Adset Template `E2E CostCap Dynamic BENL`:** Conversions, **Cost Cap** with bid amount ₹50, Daily ₹200, Gender: Male, Age: 18-35, Location: Belgium + Netherlands (multi-country), Dynamic Creative OFF (let auto-logic handle it)
+- **Campaign Builder:** New campaign with **2 ad sets**:
+  - Ad Set 1: Dynamic Video Ad (3 headlines + 2 primary texts, Video uploaded, Multi-Variant OFF)
+  - Ad Set 2: Simple Image Ad (1 headline + 1 primary text, Image uploaded)
+- **Result:** PASS — Ad Set 1: `bid_strategy: COST_CAP`, `bid_amount: 5000`, `countries: ["BE", "NL"]`, `genders: [1]`, video uploaded + polled, `asset_feed_spec` with `ad_formats: ['SINGLE_VIDEO']`, 3 titles, 2 bodies, asset_customization_rules for fb/ig. Ad Set 2: separate simple image ad with `object_story_spec`. Both ad sets created in the same campaign.
+
+### Scenario 6 — Validation Failures
+**Covers:** 20.1-20.14
+
+Tested the following error paths without actually launching:
+- **No account selected** → Start Campaign disabled, readiness 0/N — PASS
+- **No campaign name** → readiness incomplete, button disabled — PASS
+- **No campaign template** → readiness incomplete, button disabled — PASS
+- **Multi-Variant ON + no story variant selected** → error toast blocks launch — PASS
+- **Dynamic Creative ON + 2 ads in same ad set** → error toast "Meta allows only 1 ad per dynamic creative ad set" — PASS
+- **Ad template with no conversion domain** → error toast "no URL configured" — PASS
+
+### Scenario 7 — Existing Campaign + Existing Ad Set
+**Covers:** 15.10, 16.37, 25.12
+
+- **Campaign Type:** Existing → pasted campaign ID from Scenario 1
+- **Ad Set Type:** Existing → pasted ad set ID from the same campaign
+- **Ad:** 1 image ad with Ad Template `E2E Image LearnMore`
+- **Result:** PASS — Network shows only 1 `meta-proxy` call (ad creation only, no campaign/adset creation). Ad appears under the existing campaign in Meta Ads Manager. Also verified UX: when campaign is New, Ad Set Type toggle is hidden (only New ad sets allowed); when campaign is Existing, amber warning shown on Existing Ad Set field.
+
+### Scenario 8 — AI Bulk Edit + Push to Meta
+**Covers:** 21 (all)
+
+- Loaded ads from test account via `meta-fetch-ads`
+- Filtered by headline, body, ad type, Active only — all filters work
+- Selected 2-3 ads → AI Bulk Edit panel appeared → entered prompt "Make the headlines more urgent..." → Generate Suggestions → Claude returned diffs
+- Verified strikethrough original + green bold suggestion display per headline/body with individual labels (Body 1, Body 2, Headline 1, etc.)
+- Tested per-field Revert button — restored individual suggestion to original
+- Tested Accept — ad marked "Modified", fixed bottom Push bar appeared
+- Tested Collapse unselected / Collapse all / Expand all — all work
+- Clicked **Push to Meta** → updates sent via `meta-proxy` with clean creative payload
+- **Initial errors debugged and fixed:**
+  - Simple ad: "Only one of picture and image_hash should be specified" → fixed by building minimal clean `object_story_spec` from scratch (prefer `picture` over `image_hash`)
+  - Asset feed ad: "body_var_1 doesn't refer to any of the asset labels" → fixed by preserving original adlabels structure and only replacing the `text` field
+- **Result:** PASS — Both simple and asset feed ads updated successfully in-place on Meta
+
+### Scenario 9 — Bulk Uploader Cross-Objective Duplication
+**Covers:** 22 (all)
+
+- Loaded ads + ad sets from test account
+- Search filters verified (ads by name/ID/headline/campaign, ad sets by name/campaign)
+- Selected 2 ads from different campaigns (Multi-Variant Awareness + Carousel Traffic) and 2 target ad sets from different campaigns (both Sales)
+- **Initial approach failed:** Meta's `/{ad_id}/copies` endpoint rejected with "Ad set can not be copied into X because it uses a different objective"
+- **Rewrote duplication logic:** Instead of Meta's native copy endpoint, the code now:
+  1. Fetches each source ad's creative spec via `metaGet({ad_id}?fields=name,tracking_specs,creative{...})`
+  2. Identifies ad type (asset_feed_spec vs object_story_spec, image/video/carousel)
+  3. Cleans the creative spec (strips adlabel IDs, resolves `image_hash`/`picture` conflicts, preserves `degrees_of_freedom_spec`, `instagram_user_id`, etc.)
+  4. Creates a fresh ad via `POST act_{id}/ads` with the cleaned creative + target `adset_id`
+- **Additional fix:** `url_tags` was being requested but isn't a valid field at either ad or creative level in current Meta API — removed from fetch
+- **Result:** PASS — 4 new ads created (2 source ads × 2 target ad sets), works across different campaign objectives since fresh ads are created, not copied
