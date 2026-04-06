@@ -22,6 +22,9 @@ dist-ssr
 # Design reference files (Stitch mockups - local only)
 design-reference/
 
+# Claude Code local context (not for commit)
+CLAUDE.md
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
