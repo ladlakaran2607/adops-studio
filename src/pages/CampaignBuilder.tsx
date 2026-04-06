@@ -17,6 +17,7 @@ import type { CampaignTemplate, AdsetTemplate, AdTemplate, AdvantageCreativeTemp
 import { cn } from '@/lib/utils';
 import { CreativeSection, createEmptyCreativeData, type CreativeData } from '@/components/builder/CreativeSection';
 import { DocumentImport, type ParsedDocument } from '@/components/builder/DocumentImport';
+import { AITemplateRecommender } from '@/components/builder/AITemplateRecommender';
 import { launchCampaign, type LaunchResult } from '@/lib/campaignService';
 import { useAuth } from '@/contexts/AuthContext';
 import { useAdAccounts } from '@/hooks/useAdAccounts';
@@ -1433,6 +1434,21 @@ export default function CampaignBuilder() {
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* AI Template Recommender floating bubble */}
+      <AITemplateRecommender
+        onApplyCampaign={(id) => setCampaignTemplateId(id)}
+        onApplyAdset={(id) => {
+          // Apply to the first ad set (user can change manually)
+          if (adSets.length > 0) updateAdSet(adSets[0].id, { adsetTemplateId: id });
+        }}
+        onApplyAd={(id) => {
+          // Apply to the first ad in the first ad set
+          if (adSets.length > 0 && adSets[0].ads.length > 0) {
+            updateAd(adSets[0].id, adSets[0].ads[0].id, { adTemplateId: id });
+          }
+        }}
+      />
     </AppLayout>
   );
 }

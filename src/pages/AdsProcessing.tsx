@@ -11,7 +11,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
 import { AccountSelector } from '@/components/shared/AccountSelector';
 import { invokeEdgeFunction } from '@/lib/edgeFunctions';
-import { metaPost } from '@/lib/metaApi';
+import { metaPost, metaGet } from '@/lib/metaApi';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
@@ -239,52 +239,93 @@ export default function AdsProcessing() {
 
     for (const ad of modifiedAds) {
       try {
-        // Fetch current ad creative to get existing spec
-        const adData = await invokeEdgeFunction<Record<string, unknown>>('meta-proxy', {
-          account_id: accountId,
-          method: 'GET',
-          path: `${ad.id}?fields=creative{id,asset_feed_spec,object_story_spec}`,
-        });
+        // Step 1: Fetch the full current creative spec from Meta
+        const adData = await metaGet(accountId, `${ad.id}?fields=name,creative{id,asset_feed_spec,object_story_spec,url_tags}`);
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const creative = (adData as any)?.creative;
-        if (!creative?.id) throw new Error('Could not fetch creative for ad');
+        if (!creative) throw new Error('Could not fetch creative for ad');
+
+        // Step 2: Build updated creative with new text content
+        const updatedCreative: Record<string, unknown> = {};
 
         if (creative.asset_feed_spec) {
-          // Asset feed spec ad — update titles, bodies, descriptions on the creative
-          const updates: Record<string, unknown> = {};
-          if (ad.headlines.length > 0) updates.titles = ad.headlines.map(t => ({ text: t }));
-          if (ad.bodies.length > 0) updates.bodies = ad.bodies.map(t => ({ text: t }));
-          if (ad.descriptions.length > 0) updates.descriptions = ad.descriptions.map(t => ({ text: t }));
+          // Asset feed spec ad — update text while preserving adlabels structure
+          const afs = JSON.parse(JSON.stringify(creative.asset_feed_spec));
 
-          await metaPost(accountId, `${creative.id}`, {
-            asset_feed_spec: { ...creative.asset_feed_spec, ...updates },
-          });
-        } else if (creative.object_story_spec) {
-          // Simple ad — update link_data or video_data message/name
-          const oss = creative.object_story_spec;
-          const updatedOss = { ...oss };
-
-          if (oss.link_data) {
-            updatedOss.link_data = {
-              ...oss.link_data,
-              ...(ad.bodies[0] !== undefined && { message: ad.bodies[0] }),
-              ...(ad.headlines[0] !== undefined && { name: ad.headlines[0] }),
-              ...(ad.descriptions[0] !== undefined && { description: ad.descriptions[0] }),
-            };
-          } else if (oss.video_data) {
-            updatedOss.video_data = {
-              ...oss.video_data,
-              ...(ad.bodies[0] !== undefined && { message: ad.bodies[0] }),
-              ...(ad.headlines[0] !== undefined && { title: ad.headlines[0] }),
-              ...(ad.descriptions[0] !== undefined && { link_description: ad.descriptions[0] }),
-            };
+          // Update titles: preserve existing adlabels, update text
+          if (ad.headlines.length > 0 && afs.titles) {
+            afs.titles = ad.headlines.map((text: string, i: number) => {
+              const existing = afs.titles[i] || afs.titles[0];
+              return { ...existing, text };
+            });
+          }
+          // Update bodies: preserve existing adlabels, update text
+          if (ad.bodies.length > 0 && afs.bodies) {
+            afs.bodies = ad.bodies.map((text: string, i: number) => {
+              const existing = afs.bodies[i] || afs.bodies[0];
+              return { ...existing, text };
+            });
+          }
+          // Update descriptions: preserve existing adlabels, update text
+          if (ad.descriptions.length > 0 && afs.descriptions) {
+            afs.descriptions = ad.descriptions.map((text: string, i: number) => {
+              const existing = afs.descriptions[i] || afs.descriptions[0];
+              return { ...existing, text };
+            });
           }
 
-          await metaPost(accountId, `${creative.id}`, {
-            object_story_spec: updatedOss,
-          });
+          updatedCreative.asset_feed_spec = afs;
+          if (creative.object_story_spec) {
+            updatedCreative.object_story_spec = creative.object_story_spec;
+          }
+        } else if (creative.object_story_spec) {
+          // Simple ad — build minimal object_story_spec with only text fields changed
+          const oss = creative.object_story_spec;
+
+          if (oss.link_data) {
+            // Only send page_id + link_data with the essential fields
+            const linkData: Record<string, unknown> = {
+              link: oss.link_data.link,
+            };
+            // Use picture URL (not image_hash) for the image reference
+            if (oss.link_data.picture) linkData.picture = oss.link_data.picture;
+            // Text fields — use updated values
+            linkData.name = ad.headlines[0] ?? oss.link_data.name;
+            linkData.message = ad.bodies[0] ?? oss.link_data.message;
+            if (ad.descriptions[0] !== undefined) linkData.description = ad.descriptions[0];
+            // Preserve CTA
+            if (oss.link_data.call_to_action) linkData.call_to_action = oss.link_data.call_to_action;
+
+            updatedCreative.object_story_spec = {
+              page_id: oss.page_id,
+              ...(oss.instagram_user_id ? { instagram_user_id: oss.instagram_user_id } : {}),
+              link_data: linkData,
+            };
+          } else if (oss.video_data) {
+            const videoData: Record<string, unknown> = {
+              video_id: oss.video_data.video_id,
+            };
+            if (oss.video_data.image_url) videoData.image_url = oss.video_data.image_url;
+            videoData.title = ad.headlines[0] ?? oss.video_data.title;
+            videoData.message = ad.bodies[0] ?? oss.video_data.message;
+            if (oss.video_data.call_to_action) videoData.call_to_action = oss.video_data.call_to_action;
+
+            updatedCreative.object_story_spec = {
+              page_id: oss.page_id,
+              ...(oss.instagram_user_id ? { instagram_user_id: oss.instagram_user_id } : {}),
+              video_data: videoData,
+            };
+          }
         }
+
+        // Update the ad with new inline creative
+        const adUpdatePayload: Record<string, unknown> = {
+          name: adData.name || ad.name,
+          creative: updatedCreative,
+        };
+
+        await metaPost(accountId, `${ad.id}`, adUpdatePayload);
 
         successCount++;
         setAds(prev => prev.map(a => a.id === ad.id ? { ...a, modified: false } : a));

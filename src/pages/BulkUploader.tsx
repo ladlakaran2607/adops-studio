@@ -10,6 +10,7 @@ import {
   Rocket, Copy, X, Search, RefreshCw, Image, Film, LayoutGrid, Check, Info, ClipboardList,
 } from 'lucide-react';
 import { invokeEdgeFunction } from '@/lib/edgeFunctions';
+import { metaPost, metaGet } from '@/lib/metaApi';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
@@ -149,19 +150,237 @@ export default function BulkUploader() {
 
   const handleLaunch = async () => {
     setLaunching(true);
+    let successCount = 0;
+    let errorCount = 0;
+    const errors: string[] = [];
+
     try {
-      const data = await invokeEdgeFunction<BulkDuplicateResponse>('meta-bulk-duplicate', {
-        account_id: accountId,
-        source_ad_ids: [...selectedAdIds],
-        target_adset_ids: [...selectedAdSetIds],
-      });
-      const { summary } = data;
-      setLaunched(true);
-      if (summary.errors > 0) {
-        toast.warning(`${summary.success}/${summary.total} duplications successful, ${summary.errors} failed`);
-      } else {
-        toast.success(`All ${summary.total} duplications successful!`);
+      const adIds = [...selectedAdIds];
+      const adSetIds = [...selectedAdSetIds];
+
+      // Step 1: Fetch full ad + creative spec for all selected ads (once per ad)
+      const adCreatives: Record<string, { name: string; creative: Record<string, unknown>; trackingSpecs?: unknown; urlTags?: string }> = {};
+
+      // Creative fields: only request fields that exist on the AdCreative object in Meta API
+      const creativeFields = [
+        'id',
+        'name',
+        'asset_feed_spec',
+        'object_story_spec',
+        'degrees_of_freedom_spec',
+        'product_set_id',
+        'instagram_user_id',
+        'instagram_actor_id',
+      ].join(',');
+
+      for (const adId of adIds) {
+        try {
+          const adData = await metaGet(accountId, `${adId}?fields=name,tracking_specs,creative{${creativeFields}}`);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const creative = (adData as any)?.creative;
+          if (!creative) throw new Error('No creative found');
+
+          // Determine ad type from creative structure
+          const hasAssetFeed = !!creative.asset_feed_spec;
+          const hasOSS = !!creative.object_story_spec;
+          const oss = creative.object_story_spec || {};
+          const isVideo = !!oss.video_data || creative.asset_feed_spec?.ad_formats?.includes('SINGLE_VIDEO');
+          const isCarousel = !!oss.link_data?.child_attachments || creative.asset_feed_spec?.ad_formats?.includes('CAROUSEL');
+          const adType = isVideo ? 'VIDEO' : isCarousel ? 'CAROUSEL' : 'IMAGE';
+          const structureType = hasAssetFeed ? 'ASSET_FEED' : 'SIMPLE';
+          console.log(`[Bulk Duplicate] Ad ${adId}: ${adType} ${structureType}`);
+
+          // Build clean creative spec
+          const cleanCreative: Record<string, unknown> = {};
+
+          // === ASSET FEED SPEC ===
+          if (hasAssetFeed) {
+            // Deep clone and strip Meta-generated IDs from adlabels (they're read-only)
+            const afs = JSON.parse(JSON.stringify(creative.asset_feed_spec));
+            const stripAdLabels = (items: Record<string, unknown>[] | undefined) => {
+              if (!Array.isArray(items)) return items;
+              return items.map(item => {
+                if (Array.isArray(item.adlabels)) {
+                  item.adlabels = (item.adlabels as Record<string, unknown>[]).map(l => ({ name: l.name }));
+                }
+                return item;
+              });
+            };
+            if (afs.titles) afs.titles = stripAdLabels(afs.titles);
+            if (afs.bodies) afs.bodies = stripAdLabels(afs.bodies);
+            if (afs.descriptions) afs.descriptions = stripAdLabels(afs.descriptions);
+            if (afs.images) {
+              afs.images = (afs.images as Record<string, unknown>[]).map(img => {
+                const cleaned: Record<string, unknown> = {};
+                // Prefer url; if only hash present, keep hash
+                if (img.url) cleaned.url = img.url;
+                else if (img.hash) cleaned.hash = img.hash;
+                if (img.adlabels) cleaned.adlabels = (img.adlabels as Record<string, unknown>[]).map(l => ({ name: l.name }));
+                if (img.image_crops) cleaned.image_crops = img.image_crops;
+                return cleaned;
+              });
+            }
+            if (afs.videos) {
+              afs.videos = (afs.videos as Record<string, unknown>[]).map(vid => {
+                const cleaned: Record<string, unknown> = {};
+                if (vid.video_id) cleaned.video_id = vid.video_id;
+                if (vid.thumbnail_url) cleaned.thumbnail_url = vid.thumbnail_url;
+                if (vid.thumbnail_hash) cleaned.thumbnail_hash = vid.thumbnail_hash;
+                if (vid.adlabels) cleaned.adlabels = (vid.adlabels as Record<string, unknown>[]).map(l => ({ name: l.name }));
+                return cleaned;
+              });
+            }
+            if (afs.asset_customization_rules) {
+              afs.asset_customization_rules = (afs.asset_customization_rules as Record<string, unknown>[]).map(rule => {
+                const cleanedRule: Record<string, unknown> = { ...rule };
+                // Strip IDs from label refs
+                for (const key of ['image_label', 'video_label', 'title_label', 'body_label', 'description_label', 'carousel_label']) {
+                  if (cleanedRule[key] && typeof cleanedRule[key] === 'object') {
+                    cleanedRule[key] = { name: (cleanedRule[key] as Record<string, unknown>).name };
+                  }
+                }
+                return cleanedRule;
+              });
+            }
+            // Strip read-only fields
+            delete afs.additional_data;
+            delete afs.reasons_to_shop;
+            delete afs.shops_bundle;
+
+            cleanCreative.asset_feed_spec = afs;
+
+            // object_story_spec for asset feed ads usually contains only page_id + instagram_user_id
+            if (hasOSS) {
+              const minimalOss: Record<string, unknown> = {};
+              if (oss.page_id) minimalOss.page_id = oss.page_id;
+              if (oss.instagram_user_id) minimalOss.instagram_user_id = oss.instagram_user_id;
+              if (oss.instagram_actor_id) minimalOss.instagram_actor_id = oss.instagram_actor_id;
+              cleanCreative.object_story_spec = minimalOss;
+            }
+          }
+
+          // === SIMPLE SPEC (object_story_spec only) ===
+          else if (hasOSS) {
+            const cleanOss: Record<string, unknown> = {};
+            if (oss.page_id) cleanOss.page_id = oss.page_id;
+            if (oss.instagram_user_id) cleanOss.instagram_user_id = oss.instagram_user_id;
+            if (oss.instagram_actor_id) cleanOss.instagram_actor_id = oss.instagram_actor_id;
+
+            // VIDEO
+            if (oss.video_data) {
+              const vd = oss.video_data;
+              const cleanVd: Record<string, unknown> = {};
+              if (vd.video_id) cleanVd.video_id = vd.video_id;
+              if (vd.image_url) cleanVd.image_url = vd.image_url;
+              else if (vd.image_hash) cleanVd.image_hash = vd.image_hash;
+              if (vd.title) cleanVd.title = vd.title;
+              if (vd.message) cleanVd.message = vd.message;
+              if (vd.link_description) cleanVd.link_description = vd.link_description;
+              if (vd.call_to_action) cleanVd.call_to_action = vd.call_to_action;
+              cleanOss.video_data = cleanVd;
+            }
+            // IMAGE / CAROUSEL (link_data)
+            else if (oss.link_data) {
+              const ld = oss.link_data;
+              const cleanLd: Record<string, unknown> = {};
+              if (ld.link) cleanLd.link = ld.link;
+              if (ld.message) cleanLd.message = ld.message;
+              if (ld.name) cleanLd.name = ld.name;
+              if (ld.description) cleanLd.description = ld.description;
+              // Prefer picture over image_hash (Meta rejects both)
+              if (ld.picture) cleanLd.picture = ld.picture;
+              else if (ld.image_hash) cleanLd.image_hash = ld.image_hash;
+              if (ld.call_to_action) cleanLd.call_to_action = ld.call_to_action;
+              if (ld.multi_share_optimized !== undefined) cleanLd.multi_share_optimized = ld.multi_share_optimized;
+              if (ld.multi_share_end_card !== undefined) cleanLd.multi_share_end_card = ld.multi_share_end_card;
+
+              // Carousel child attachments
+              if (Array.isArray(ld.child_attachments)) {
+                cleanLd.child_attachments = (ld.child_attachments as Record<string, unknown>[]).map(c => {
+                  const cleanChild: Record<string, unknown> = {};
+                  if (c.name) cleanChild.name = c.name;
+                  if (c.link) cleanChild.link = c.link;
+                  if (c.description) cleanChild.description = c.description;
+                  // Prefer picture over image_hash
+                  if (c.picture) cleanChild.picture = c.picture;
+                  else if (c.image_hash) cleanChild.image_hash = c.image_hash;
+                  if (c.video_id) cleanChild.video_id = c.video_id;
+                  if (c.call_to_action) cleanChild.call_to_action = c.call_to_action;
+                  return cleanChild;
+                });
+              }
+              cleanOss.link_data = cleanLd;
+            }
+
+            cleanCreative.object_story_spec = cleanOss;
+          }
+
+          // === Advantage+ Creative (degrees_of_freedom_spec) ===
+          if (creative.degrees_of_freedom_spec) {
+            // Strip empty/internal fields
+            const dofs = creative.degrees_of_freedom_spec;
+            if (dofs.creative_features_spec && Object.keys(dofs.creative_features_spec).length > 0) {
+              cleanCreative.degrees_of_freedom_spec = { creative_features_spec: dofs.creative_features_spec };
+            }
+          }
+
+          // === Catalog / Instagram IDs ===
+          if (creative.product_set_id) cleanCreative.product_set_id = creative.product_set_id;
+          if (creative.instagram_user_id && !(cleanCreative.object_story_spec as Record<string, unknown>)?.instagram_user_id) {
+            cleanCreative.instagram_user_id = creative.instagram_user_id;
+          }
+
+          adCreatives[adId] = {
+            name: (adData as any)?.name || 'Duplicated Ad',
+            creative: cleanCreative,
+            trackingSpecs: (adData as any)?.tracking_specs,
+          };
+        } catch (err) {
+          // If we can't fetch this ad's creative, skip all its duplications
+          for (const _ of adSetIds) {
+            errorCount++;
+            errors.push(`Ad ${adId} → fetch failed: ${(err as Error).message}`);
+          }
+          console.error(`[Bulk Duplicate] Failed to fetch ad ${adId}:`, err);
+        }
       }
+
+      // Step 2: For each (ad, adset) combo, create a new ad with the fetched creative
+      for (const adId of adIds) {
+        const adInfo = adCreatives[adId];
+        if (!adInfo) continue; // Skip if fetch failed
+
+        for (const adsetId of adSetIds) {
+          try {
+            const adParams: Record<string, unknown> = {
+              name: `${adInfo.name} (copy)`,
+              adset_id: adsetId,
+              status: 'PAUSED',
+              creative: adInfo.creative,
+            };
+            if (adInfo.urlTags) adParams.url_tags = adInfo.urlTags;
+            if (adInfo.trackingSpecs) adParams.tracking_specs = adInfo.trackingSpecs;
+
+            await metaPost(accountId, `act_${accountId}/ads`, adParams);
+            successCount++;
+          } catch (err) {
+            errorCount++;
+            errors.push(`Ad ${adId} → Ad Set ${adsetId}: ${(err as Error).message}`);
+            console.error(`[Bulk Duplicate] Failed:`, adId, '→', adsetId, err);
+          }
+        }
+      }
+
+      setLaunched(true);
+      const total = successCount + errorCount;
+      if (errorCount > 0 && successCount > 0) {
+        toast.warning(`${successCount}/${total} duplications successful, ${errorCount} failed`);
+      } else if (errorCount > 0) {
+        toast.error(`${errorCount}/${total} duplications failed`);
+      } else {
+        toast.success(`All ${total} duplications successful!`);
+      }
+      if (errors.length > 0) console.error('[Bulk Duplicate Errors]', errors);
       setSelectedAdIds(new Set());
       setSelectedAdSetIds(new Set());
       setTimeout(() => setLaunched(false), 5000);

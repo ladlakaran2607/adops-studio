@@ -84,7 +84,8 @@ getAccessToken(accountId)
 | `meta-fetch-ads` | LIVE | AdsProcessing, BulkUploader | Fetch + normalize ads from Meta |
 | `meta-fetch-adsets` | LIVE | BulkUploader | Fetch ad sets from Meta |
 | `meta-bulk-duplicate` | LIVE | BulkUploader | Copy ads to ad sets via `/{ad_id}/copies` |
-| `ai-bulk-edit` | LIVE | AdsProcessing | Claude API for ad copy suggestions |
+| `ai-bulk-edit` | LIVE | AdsProcessing | OpenAI API for ad copy suggestions |
+| `ai-template-match` | LIVE | CampaignBuilder (AITemplateRecommender) | OpenAI API for template recommendations |
 | `meta-fetch-leadforms` | LIVE | useLeadForms.ts hook | Fetch lead forms from Meta page |
 | `cloudinary-sign` | LIVE | CreativeSection.tsx | Signed Cloudinary upload credentials |
 
@@ -130,6 +131,14 @@ BulkUploader.tsx → meta-fetch-ads + meta-fetch-adsets (fetch both)
 CreativeSection.tsx → cloudinary-sign (get signature)
   → Upload to Cloudinary API → HTTPS URL replaces blob
   → Story variants auto-generated via URL transforms (AI Gen Fill + Face Crop)
+```
+
+### AI Template Recommendation
+```
+CampaignBuilder.tsx → AITemplateRecommender → ai-template-match edge function
+  → Fetches all templates (Campaign, AdSet, Ad) for tenant
+  → OpenAI GPT-4.1 ranks best matches → Returns recommendations
+  → User clicks "Apply" → template selectors auto-filled
 ```
 
 ### Geo Location Search
@@ -275,17 +284,22 @@ See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the full production deployment guide:
 
 **Campaign Launch Logic**
 - Smart creative dispatch: automatically selects the right Meta API format based on creative type + story variants + text count (10 combinations handled)
-- Multi-text without Dynamic Creative: when multi-variant is ON, asset_feed_spec handles multiple headlines/texts via shared adlabels — no Dynamic Creative required. When multi-variant is OFF, auto-enables `is_dynamic_creative: true`
-- Advantage+ Creative: maps individual template toggles to Meta API feature keys (`image_touchups`, `text_optimizations`, `image_animation`, etc.)
+- Dynamic Creative logic: `is_dynamic_creative: true` is only set when explicitly enabled in the adset template AND no story variants exist. Multi-text ads use `asset_feed_spec` with `optimization_type: PLACEMENT` and shared adlabels — no dynamic creative needed
+- Advantage+ Creative: maps individual template toggles to Meta API feature keys (`image_touchups`, `text_optimizations`, `image_animation`, etc.) using the current API format (NOT deprecated `standard_enhancements`)
 - CBO ON/OFF handling: budget + bid at correct level (campaign vs ad set), bid_amount passed to both levels when required
 - All 4 bid strategies supported: Lowest Cost, Bid Cap, Cost Cap, Minimum ROAS — with bid amount fields shown conditionally
 - Targeting automation: `advantage_audience: 0` set by default (Meta v22.0 requirement)
-- Lead ad support: lead form ID passed correctly for On Ad conversion, `http://fb.me/` link for lead CTAs
+- Lead ad support: lead form ID passed correctly for On Ad conversion, `http://fb.me/` link for lead CTAs, applies to all creative types (image, video, carousel) for both simple and asset_feed_spec
 - Location targeting: countries, cities (with radius + distance unit), and regions — all via Meta geo search API
 - Attribution spec parsing: `7d_click_1d_view`, `1d_click`, `28d_click_1d_view` etc.
 - DSA compliance: `dsa_beneficiary` and `dsa_payor` auto-set from page_id
 - Pre-launch validation: all required fields checked, blob URLs blocked, story variants verified, Dynamic Creative constraints enforced
 - Partial failure handling: campaign + ad sets created even if some ads fail, errors shown per-item
+- Video upload polling: after uploading to Meta's `advideos` endpoint, polls `GET /{video_id}?fields=status` every 3s until video status is `ready` (max 60s) before creating the ad — prevents "video still processing" errors
+- Launch overlay: full-screen overlay during campaign creation with 100 rotating motivational quotes (5s interval) and live campaign summary (name, objective, ad sets, total ads, per-ad-set breakdown)
+- "New campaign" cannot use existing ad sets (Meta limitation): Ad Set Type toggle is hidden when campaign is New; switching from Existing → New auto-resets all ad sets to New type
+- "Existing campaign + Existing ad set": shows amber warning that the ad set ID must belong to the specified campaign
+- Rollback on failure: reverted for safety — failed ads/ad sets are logged but not automatically deleted (can be re-added on demand if client requests)
 
 **Ads Processing (AI Bulk Edit)**
 - Redesigned filter card with dark "Load Ads" button and clean filter grid
@@ -300,6 +314,7 @@ See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the full production deployment guide:
 - Fixed dark "Push to Meta" bar at bottom with discard option
 - Nudge banner for empty state (shows before and after account selection)
 - Colored badges: IMAGE (blue), VIDEO (slate), ACTIVE (green), PAUSED (amber), MODIFIED (amber)
+- Push to Meta update logic: fetches current creative spec, updates only text fields (titles/bodies/descriptions for asset_feed_spec, name/message/description for link_data, title/message for video_data) while preserving adlabels structure, image_crops, and other non-text fields. For simple ads, builds a clean minimal creative from scratch (prefers `picture` over `image_hash` to avoid conflicts). For asset feed ads, sends full updated creative via the ad endpoint.
 
 **Bulk Uploader**
 - Account selector + "Load Ads & Ad Sets" in sticky header
@@ -310,6 +325,8 @@ See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the full production deployment guide:
 - Dark "Duplicate X Ads to Y Ad Sets" button with rocket icon
 - Guidance banner with different messages based on state (no account vs account selected vs data loaded)
 - Selections auto-cleared after successful duplication
+- Duplication logic: instead of Meta's `/{ad_id}/copies` endpoint (which fails when source and target campaigns have different objectives), the code fetches each source ad's full creative spec, identifies the ad type (asset_feed_spec vs object_story_spec, image/video/carousel), cleans the spec (strips read-only IDs, removes image_hash/picture conflicts, preserves adlabels structure), and creates a new ad via `POST act_{id}/ads` with the cleaned creative + target adset_id. Works across different campaign objectives because it creates fresh ads instead of copying.
+- Preserves: `asset_feed_spec` (with titles/bodies/descriptions/images/videos/asset_customization_rules/call_to_action_types/link_urls), `object_story_spec` (link_data/video_data with all text and media fields), `degrees_of_freedom_spec` (Advantage+ Creative), `tracking_specs`, `instagram_user_id`, `product_set_id`
 
 **Infrastructure**
 - 8 edge functions deployed (meta-proxy, meta-fetch-ads, meta-fetch-adsets, meta-bulk-duplicate, meta-fetch-leadforms, ai-bulk-edit, cloudinary-sign, meta-validate-token)
