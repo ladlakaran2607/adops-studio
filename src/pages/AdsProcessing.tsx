@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -6,12 +6,14 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { RefreshCw, Sparkles, Check, X, ChevronDown, ChevronUp, Pencil, Download, CheckCircle2, Undo2, ChevronsUpDown, ChevronsDownUp, AlertTriangle } from 'lucide-react';
+import { RefreshCw, Sparkles, Check, X, ChevronDown, ChevronUp, Pencil, Download, CheckCircle2, Undo2, ChevronsUpDown, ChevronsDownUp, AlertTriangle, ArrowUp } from 'lucide-react';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
 import { AccountSelector } from '@/components/shared/AccountSelector';
 import { useAdAccounts, getMissingAccountFields } from '@/hooks/useAdAccounts';
 import { invokeEdgeFunction } from '@/lib/edgeFunctions';
+import { bulkEditAds } from '@/lib/openaiClient';
+import { buildCreativeUpdate } from '@/lib/metaCreativeUpdate';
 import { metaPost, metaGet } from '@/lib/metaApi';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -31,6 +33,7 @@ interface Ad {
   selected: boolean;
   modified: boolean;         // true after accepting AI suggestions (pending push to Meta)
   aiSuggestion?: string;     // JSON of { headlines: string[], bodies: string[], descriptions: string[] }
+  aiAnalyzedAt?: number;     // timestamp of last AI run that included this ad — drives the post-AI sort
 }
 
 interface MetaFetchAdsResponse {
@@ -45,12 +48,48 @@ interface MetaFetchAdsResponse {
   }>;
 }
 
-interface AiBulkEditResponse {
-  suggestions: Record<string, {
-    headlines: string[];
-    bodies: string[];
-    descriptions: string[];
-  }>;
+/**
+ * Quirky rotating quotes shown while the AI is processing. Cycles every 3s.
+ * Keep them short, on-brand for ad ops, and a little funny.
+ */
+const aiQuotes = [
+  "AI is breaking a sweat to make your request happen…",
+  "Teaching the model to read between your headlines…",
+  "Whispering your instruction to every ad in unison…",
+  "Brewing fresh ad copy with extra serotonin…",
+  "Convincing the AI that 'catchy' isn't subjective…",
+  "Negotiating with words for a better conversion rate…",
+  "Auditing every comma for vibes…",
+  "The AI is rolling up its sleeves…",
+  "Sprinkling a little magic on each variant…",
+  "Asking the model to channel its inner copywriter…",
+  "Polishing each headline like a small gemstone…",
+  "Translating your wishes into clickable English…",
+  "Hand-rolling new copy, one ad at a time…",
+  "The model is consulting its thesaurus…",
+  "Dispatching verbs to where they're needed most…",
+];
+
+/**
+ * Sort group for the post-AI ad ordering. Lower number = higher in the list.
+ *   0 → modified by THIS ai run (top, user needs to review)
+ *   1 → never analyzed by an ai run (middle, user hasn't decided to involve them)
+ *   2 → analyzed by THIS ai run with no applicable changes (bottom, can be ignored)
+ *
+ * The "this run" check uses the analyzedAt timestamp so a previous run's
+ * unchanged ads don't get pushed to the bottom forever — only the most recent
+ * run's verdicts shape the sort.
+ */
+function groupForSort(
+  ad: Ad,
+  analyzedAt: number,
+  result: { modifiedAdIds: Set<string>; unchangedAdIds: Set<string> },
+): number {
+  const wasAnalyzedThisRun = ad.aiAnalyzedAt === analyzedAt;
+  if (!wasAnalyzedThisRun) return 1;
+  if (result.modifiedAdIds.has(ad.id)) return 0;
+  if (result.unchangedAdIds.has(ad.id)) return 2;
+  return 1;
 }
 
 export default function AdsProcessing() {
@@ -69,11 +108,34 @@ export default function AdsProcessing() {
   const [aiPrompt, setAiPrompt] = useState('');
   const [showAiPanel, setShowAiPanel] = useState(false);
   const [aiProcessing, setAiProcessing] = useState(false);
+  // Rotating quirky quote shown while the AI is processing
+  const [aiQuoteIndex, setAiQuoteIndex] = useState(0);
+  useEffect(() => {
+    if (!aiProcessing) return;
+    // Pick a random starting quote each time so users don't see the same one first
+    setAiQuoteIndex(Math.floor(Math.random() * aiQuotes.length));
+    const id = setInterval(() => {
+      setAiQuoteIndex(i => (i + 1) % aiQuotes.length);
+    }, 3000);
+    return () => clearInterval(id);
+  }, [aiProcessing]);
   // Track which suggestion text is being edited: key = "adId-field-index"
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   // Collapse state for ad cards
   const [collapsedAds, setCollapsedAds] = useState<Set<string>>(new Set());
+
+  // Scroll-to-top floating button: visible after the user scrolls past 600px
+  // (roughly the height of the filter card + AI panel) so it doesn't show on
+  // pages where there's nothing to scroll back to.
+  const [showScrollTop, setShowScrollTop] = useState(false);
+  useEffect(() => {
+    const handleScroll = () => setShowScrollTop(window.scrollY > 600);
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    handleScroll(); // initial check in case the page is already scrolled
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+  const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' });
 
   const startEditSuggestion = (adId: string, field: string, index: number, currentText: string) => {
     setEditingKey(`${adId}-${field}-${index}`);
@@ -175,8 +237,22 @@ export default function AdsProcessing() {
         selected: false,
         modified: false,
       }));
-      setAds(mapped);
-      toast.success(`Loaded ${mapped.length} ads`);
+      // Deduplicate by id. Meta's pagination occasionally returns the same ad
+      // on the boundary between two pages, which would cause Push to Meta to
+      // process the same ad multiple times. Keeping the first occurrence is
+      // safe — duplicates are byte-identical anyway.
+      const seenIds = new Set<string>();
+      const deduped = mapped.filter(ad => {
+        if (seenIds.has(ad.id)) return false;
+        seenIds.add(ad.id);
+        return true;
+      });
+      const dupeCount = mapped.length - deduped.length;
+      if (dupeCount > 0) {
+        console.warn(`[meta-fetch-ads] Removed ${dupeCount} duplicate ad(s) from fetch result`);
+      }
+      setAds(deduped);
+      toast.success(`Loaded ${deduped.length} ads`);
     } catch (err) {
       toast.error(`Failed to load ads: ${(err as Error).message}`);
     } finally {
@@ -194,16 +270,53 @@ export default function AdsProcessing() {
         bodies: a.bodies,
         descriptions: a.descriptions,
       }));
-      const data = await invokeEdgeFunction<AiBulkEditResponse>('ai-bulk-edit', {
-        prompt: aiPrompt,
-        ads: payload,
+
+      const result = await bulkEditAds(aiPrompt, payload);
+      const analyzedAt = Date.now();
+
+      // Update ads: attach aiSuggestion only when there are real changes,
+      // stamp aiAnalyzedAt on every ad we sent so the sort can find them.
+      const updated = ads.map(ad => {
+        if (!result.suggestions[ad.id]) return ad;
+        const suggestion = result.suggestions[ad.id];
+        const isModified = result.modifiedAdIds.has(ad.id);
+        return {
+          ...ad,
+          aiAnalyzedAt: analyzedAt,
+          // Only attach aiSuggestion if there's actually something to show
+          aiSuggestion: isModified ? JSON.stringify(suggestion) : undefined,
+        };
       });
-      setAds(prev => prev.map(ad => {
-        const suggestion = data.suggestions?.[ad.id];
-        if (!suggestion) return ad;
-        return { ...ad, aiSuggestion: JSON.stringify(suggestion) };
-      }));
-      toast.success(`Generated suggestions for ${Object.keys(data.suggestions || {}).length} ads`);
+
+      // Sort: modified (this run) first → unchanged (this run) at the bottom
+      // → never-analyzed in the middle, original order preserved within each group.
+      const sorted = [...updated].sort((a, b) => {
+        const aGroup = groupForSort(a, analyzedAt, result);
+        const bGroup = groupForSort(b, analyzedAt, result);
+        if (aGroup !== bGroup) return aGroup - bGroup;
+        // Within a group, preserve original order
+        return updated.indexOf(a) - updated.indexOf(b);
+      });
+
+      setAds(sorted);
+
+      // User feedback
+      if (result.modifiedAdIds.size === 0) {
+        toast.warning(
+          'AI determined the instruction does not apply to any selected ads. ' +
+          'Try a more specific or different instruction.'
+        );
+      } else {
+        let msg = `Generated suggestions for ${result.modifiedAdIds.size} of ${selectedAds.length} ads`;
+        if (result.unchangedAdIds.size > 0) {
+          msg += ` (${result.unchangedAdIds.size} unchanged)`;
+        }
+        toast.success(msg);
+      }
+
+      if (result.droppedAdIds.length > 0) {
+        console.warn(`[AI Bulk Edit] ${result.droppedAdIds.length} ads were auto-filled with originals due to model drop. See console for IDs.`);
+      }
     } catch (err) {
       toast.error(`AI processing failed: ${(err as Error).message}`);
     } finally {
@@ -231,118 +344,92 @@ export default function AdsProcessing() {
     }));
   };
 
+  const discardAll = () => {
+    setAds(prev => prev.map(ad => ad.aiSuggestion ? { ...ad, aiSuggestion: undefined } : ad));
+  };
+
   const [isPushing, setIsPushing] = useState(false);
 
   const handlePushToMeta = async () => {
-    const modifiedAds = ads.filter(a => a.modified);
+    // Defensive dedupe: even though handleRefresh already dedupes on fetch,
+    // we dedupe again here so any future code path that adds duplicates
+    // (e.g. a partial-refresh or merge) can never cause double-processing.
+    const modifiedAds: Ad[] = [];
+    const seenIds = new Set<string>();
+    for (const ad of ads) {
+      if (!ad.modified) continue;
+      if (seenIds.has(ad.id)) continue;
+      seenIds.add(ad.id);
+      modifiedAds.push(ad);
+    }
+
     if (modifiedAds.length === 0) { toast.error('No modified ads to push'); return; }
     if (!accountId) { toast.error('Select an ad account first'); return; }
 
     setIsPushing(true);
     let successCount = 0;
     let failCount = 0;
+    let firstError: string | null = null;
 
     for (const ad of modifiedAds) {
       try {
-        // Step 1: Fetch the full current creative spec from Meta
-        const adData = await metaGet(accountId, `${ad.id}?fields=name,creative{id,asset_feed_spec,object_story_spec,url_tags}`);
+        // Step 1: GET the existing creative. We need name + asset_feed_spec
+        // + object_story_spec + degrees_of_freedom_spec + url_tags so the
+        // builder can clone everything verbatim and only swap text fields.
+        // degrees_of_freedom_spec is critical — without it, Advantage+ ads
+        // silently lose their AI features on update.
+        const adData = await metaGet(
+          accountId,
+          `${ad.id}?fields=name,creative{id,name,asset_feed_spec,object_story_spec,degrees_of_freedom_spec,url_tags}`
+        );
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const creative = (adData as any)?.creative;
         if (!creative) throw new Error('Could not fetch creative for ad');
 
-        // Step 2: Build updated creative with new text content
-        const updatedCreative: Record<string, unknown> = {};
+        // Step 2: build the new-creative payload. Meta does not allow most
+        // creative fields to be edited in place, so we mint a brand-new
+        // creative and rebind the ad to it. See src/lib/metaCreativeUpdate.ts
+        // for the dispatch table covering all known ad shapes.
+        const { payload, family, format } = buildCreativeUpdate(ad, creative);
+        console.log(`[Push to Meta] ${ad.name} (${ad.id}) — ${family}/${format}`, payload);
 
-        if (creative.asset_feed_spec) {
-          // Asset feed spec ad — update text while preserving adlabels structure
-          const afs = JSON.parse(JSON.stringify(creative.asset_feed_spec));
+        // Step 3: POST the new creative
+        const createRes = await metaPost(accountId, `act_${accountId}/adcreatives`, payload);
+        const newCreativeId = (createRes as { id?: string }).id;
+        if (!newCreativeId) throw new Error('Meta did not return a creative id');
 
-          // Update titles: preserve existing adlabels, update text
-          if (ad.headlines.length > 0 && afs.titles) {
-            afs.titles = ad.headlines.map((text: string, i: number) => {
-              const existing = afs.titles[i] || afs.titles[0];
-              return { ...existing, text };
-            });
-          }
-          // Update bodies: preserve existing adlabels, update text
-          if (ad.bodies.length > 0 && afs.bodies) {
-            afs.bodies = ad.bodies.map((text: string, i: number) => {
-              const existing = afs.bodies[i] || afs.bodies[0];
-              return { ...existing, text };
-            });
-          }
-          // Update descriptions: preserve existing adlabels, update text
-          if (ad.descriptions.length > 0 && afs.descriptions) {
-            afs.descriptions = ad.descriptions.map((text: string, i: number) => {
-              const existing = afs.descriptions[i] || afs.descriptions[0];
-              return { ...existing, text };
-            });
-          }
+        // Step 4: rebind the ad to the new creative
+        await metaPost(accountId, `${ad.id}`, {
+          creative: { creative_id: newCreativeId },
+        });
 
-          updatedCreative.asset_feed_spec = afs;
-          if (creative.object_story_spec) {
-            updatedCreative.object_story_spec = creative.object_story_spec;
-          }
-        } else if (creative.object_story_spec) {
-          // Simple ad — build minimal object_story_spec with only text fields changed
-          const oss = creative.object_story_spec;
-
-          if (oss.link_data) {
-            // Only send page_id + link_data with the essential fields
-            const linkData: Record<string, unknown> = {
-              link: oss.link_data.link,
-            };
-            // Use picture URL (not image_hash) for the image reference
-            if (oss.link_data.picture) linkData.picture = oss.link_data.picture;
-            // Text fields — use updated values
-            linkData.name = ad.headlines[0] ?? oss.link_data.name;
-            linkData.message = ad.bodies[0] ?? oss.link_data.message;
-            if (ad.descriptions[0] !== undefined) linkData.description = ad.descriptions[0];
-            // Preserve CTA
-            if (oss.link_data.call_to_action) linkData.call_to_action = oss.link_data.call_to_action;
-
-            updatedCreative.object_story_spec = {
-              page_id: oss.page_id,
-              ...(oss.instagram_user_id ? { instagram_user_id: oss.instagram_user_id } : {}),
-              link_data: linkData,
-            };
-          } else if (oss.video_data) {
-            const videoData: Record<string, unknown> = {
-              video_id: oss.video_data.video_id,
-            };
-            if (oss.video_data.image_url) videoData.image_url = oss.video_data.image_url;
-            videoData.title = ad.headlines[0] ?? oss.video_data.title;
-            videoData.message = ad.bodies[0] ?? oss.video_data.message;
-            if (oss.video_data.call_to_action) videoData.call_to_action = oss.video_data.call_to_action;
-
-            updatedCreative.object_story_spec = {
-              page_id: oss.page_id,
-              ...(oss.instagram_user_id ? { instagram_user_id: oss.instagram_user_id } : {}),
-              video_data: videoData,
-            };
-          }
-        }
-
-        // Update the ad with new inline creative
-        const adUpdatePayload: Record<string, unknown> = {
-          name: adData.name || ad.name,
-          creative: updatedCreative,
-        };
-
-        await metaPost(accountId, `${ad.id}`, adUpdatePayload);
-
+        console.log(`[Push to Meta] ✓ ${ad.name} → creative ${newCreativeId}`);
         successCount++;
         setAds(prev => prev.map(a => a.id === ad.id ? { ...a, modified: false } : a));
       } catch (err) {
         failCount++;
-        console.error(`[Push to Meta] Failed for ${ad.name}:`, err);
+        const msg = (err as Error).message || String(err);
+        // Capture the first error verbatim so the user sees what Meta actually
+        // said, instead of just a count. Subsequent errors still get logged
+        // individually to the console for debugging.
+        if (firstError === null) firstError = msg;
+        console.error(`[Push to Meta] Failed for ${ad.name} (${ad.id}):`, msg, err);
       }
     }
 
     setIsPushing(false);
     if (successCount > 0) toast.success(`Updated ${successCount} ad(s) on Meta`);
-    if (failCount > 0) toast.error(`Failed to update ${failCount} ad(s)`);
+    if (failCount > 0) {
+      // Truncate long Meta errors so the toast stays readable; the console has the full thing.
+      const shortError = firstError && firstError.length > 140
+        ? firstError.slice(0, 140) + '…'
+        : firstError;
+      toast.error(
+        `Failed to update ${failCount} ad(s). First error: ${shortError ?? 'unknown'}`,
+        { duration: 10000 }
+      );
+    }
   };
 
   const adsWithSuggestions = ads.filter(a => a.aiSuggestion);
@@ -574,26 +661,45 @@ export default function AdsProcessing() {
                 placeholder='Describe what you want to change. E.g.: "Replace spring break with summer break in all texts" or "Make the text shorter and more compelling". All text variants (headlines, bodies, descriptions) will be processed.'
                 rows={3}
               />
-              <div className="flex items-center justify-end gap-3">
-                {adsWithSuggestions.length > 0 && (
-                  <Button variant="outline" onClick={acceptAll} className="border-primary text-primary font-bold rounded-xl hover:bg-accent">
-                    <Check className="w-4 h-4 mr-1" />
-                    Accept All ({adsWithSuggestions.length})
-                  </Button>
-                )}
-                <Button onClick={handleAiProcess} disabled={!aiPrompt.trim() || aiProcessing} className="bg-primary text-primary-foreground font-bold rounded-xl shadow-lg shadow-primary/20 hover:scale-[1.02] transition-all">
-                  {aiProcessing ? (
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  {aiProcessing && (
+                    <p
+                      key={aiQuoteIndex}
+                      className="text-xs italic text-muted-foreground animate-fade-in flex items-center gap-2"
+                    >
+                      <Sparkles className="w-3 h-3 text-primary shrink-0 animate-pulse" />
+                      <span className="truncate">{aiQuotes[aiQuoteIndex]}</span>
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  {adsWithSuggestions.length > 0 && (
                     <>
-                      <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                      Processing...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="w-4 h-4 mr-2" />
-                      Generate Suggestions
+                      <Button variant="outline" onClick={discardAll} className="border-destructive/40 text-destructive font-bold rounded-xl hover:bg-destructive/10">
+                        <X className="w-4 h-4 mr-1" />
+                        Discard All
+                      </Button>
+                      <Button variant="outline" onClick={acceptAll} className="border-primary text-primary font-bold rounded-xl hover:bg-accent">
+                        <Check className="w-4 h-4 mr-1" />
+                        Accept All ({adsWithSuggestions.length})
+                      </Button>
                     </>
                   )}
-                </Button>
+                  <Button onClick={handleAiProcess} disabled={!aiPrompt.trim() || aiProcessing} className="bg-primary text-primary-foreground font-bold rounded-xl shadow-lg shadow-primary/20 hover:scale-[1.02] transition-all">
+                    {aiProcessing ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-4 h-4 mr-2" />
+                        Generate Suggestions
+                      </>
+                    )}
+                  </Button>
+                </div>
               </div>
             </div>
           )}
@@ -719,6 +825,22 @@ export default function AdsProcessing() {
             </Button>
           </div>
         </div>
+      )}
+
+      {/* Floating scroll-to-top button — appears after scrolling 600px down.
+          Sits above the Push to Meta bar when modified ads exist. */}
+      {showScrollTop && (
+        <button
+          onClick={scrollToTop}
+          aria-label="Scroll to top"
+          title="Back to top"
+          className={cn(
+            'fixed right-6 z-40 w-11 h-11 rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/30 flex items-center justify-center hover:scale-110 active:scale-95 transition-all duration-200 animate-fade-in',
+            ads.some(a => a.modified) ? 'bottom-24' : 'bottom-6'
+          )}
+        >
+          <ArrowUp className="w-5 h-5" />
+        </button>
       )}
     </AppLayout>
   );
