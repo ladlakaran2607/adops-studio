@@ -5,7 +5,7 @@ import { Label } from '@/components/ui/label';
 import { Card } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Upload, Trash2, Plus, Image, Wand2, Crop, Link, Images, Loader2, Video } from 'lucide-react';
+import { Upload, Trash2, Plus, Image, Wand2, Crop, Link, Images, Loader2, Video, CopyPlus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { invokeEdgeFunction } from '@/lib/edgeFunctions';
@@ -585,6 +585,27 @@ export function CreativeSection({ data, onChange }: CreativeSectionProps) {
     });
   };
 
+  /**
+   * Copy a single field's value from the source card to every other card in
+   * the carousel. Used by the "apply to all" buttons next to Card 1's title
+   * and URL inputs — saves the user from typing the same value N times when
+   * all cards in a carousel share the same destination or headline.
+   */
+  const applyCardFieldToAll = (sourceCardId: string, field: 'title' | 'url') => {
+    const source = data.carouselCards.find(c => c.id === sourceCardId);
+    if (!source) return;
+    const value = source[field].trim();
+    if (!value) {
+      toast.error(`Card 1 ${field === 'title' ? 'title' : 'URL'} is empty — nothing to apply`);
+      return;
+    }
+    onChange({
+      ...data,
+      carouselCards: data.carouselCards.map(c => ({ ...c, [field]: value })),
+    });
+    toast.success(`Applied to all ${data.carouselCards.length} cards`);
+  };
+
   const addCard = () => {
     onChange({
       ...data,
@@ -753,7 +774,25 @@ export function CreativeSection({ data, onChange }: CreativeSectionProps) {
 
                 <div className="grid grid-cols-2 gap-3 items-end">
                   <div>
-                    <Label className="text-xs text-muted-foreground">Card Title</Label>
+                    <div className="flex items-center justify-between gap-2">
+                      <Label className="text-xs text-muted-foreground">Card Title</Label>
+                      {/* "Apply to all" only on the first card and only when
+                          there are sibling cards to copy to. The first card is
+                          the implicit source so users have a single, predictable
+                          place to look. */}
+                      {i === 0 && data.carouselCards.length > 1 && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 text-[10px] text-primary hover:bg-primary/10"
+                          onClick={() => applyCardFieldToAll(card.id, 'title')}
+                          title="Copy this title to all other cards"
+                        >
+                          <CopyPlus className="w-3 h-3 mr-1" />
+                          Apply to all
+                        </Button>
+                      )}
+                    </div>
                     <Input
                       value={card.title}
                       onChange={e => updateCard(card.id, { title: e.target.value })}
@@ -762,7 +801,21 @@ export function CreativeSection({ data, onChange }: CreativeSectionProps) {
                     />
                   </div>
                   <div>
-                    <Label className="text-xs text-muted-foreground">URL</Label>
+                    <div className="flex items-center justify-between gap-2">
+                      <Label className="text-xs text-muted-foreground">URL</Label>
+                      {i === 0 && data.carouselCards.length > 1 && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 text-[10px] text-primary hover:bg-primary/10"
+                          onClick={() => applyCardFieldToAll(card.id, 'url')}
+                          title="Copy this URL to all other cards"
+                        >
+                          <CopyPlus className="w-3 h-3 mr-1" />
+                          Apply to all
+                        </Button>
+                      )}
+                    </div>
                     <Input
                       value={card.url}
                       onChange={e => updateCard(card.id, { url: e.target.value })}

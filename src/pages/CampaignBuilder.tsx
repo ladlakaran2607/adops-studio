@@ -733,15 +733,23 @@ export default function CampaignBuilder() {
       done: !isAccountIncomplete,
     });
   }
-  readinessItems.push({ label: 'Campaign name', done: !!campaignName.trim() });
+  // For new campaigns we need a name + template; for existing campaigns we
+  // need the ID of the campaign in Meta to attach the new ad sets/ads to.
   if (campaignType === 'new') {
+    readinessItems.push({ label: 'Campaign name', done: !!campaignName.trim() });
     readinessItems.push({ label: 'Campaign template', done: !!campaignTemplateId });
+  } else {
+    readinessItems.push({ label: 'Existing Campaign ID', done: !!existingCampaignId.trim() });
   }
   adSets.forEach((adSet, si) => {
     const setLabel = `Ad Set ${si + 1}`;
     if (adSet.type === 'new') {
       readinessItems.push({ label: `${setLabel} — name`, done: !!adSet.name.trim() });
       readinessItems.push({ label: `${setLabel} — template`, done: !!adSet.adsetTemplateId });
+    } else {
+      // Existing ad set: only the Meta ad set ID matters — name/template
+      // belong to the ad set already in Meta, we just attach new ads to it.
+      readinessItems.push({ label: `${setLabel} — existing ID`, done: !!adSet.existingAdsetId.trim() });
     }
     adSet.ads.forEach((ad, ai) => {
       const adLabel = `Ad ${ai + 1}`;
