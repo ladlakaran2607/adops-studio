@@ -5,10 +5,12 @@ import { Label } from '@/components/ui/label';
 import { Card } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Upload, Trash2, Plus, Image, Wand2, Crop, Link, Images, Loader2, Video, CopyPlus } from 'lucide-react';
+import { Upload, Trash2, Plus, Image, Wand2, Crop, Link, Images, Loader2, Video, CopyPlus, Pencil, Eye } from 'lucide-react';
+import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { invokeEdgeFunction } from '@/lib/edgeFunctions';
+import { ImageCropDialog } from './ImageCropDialog';
 
 export interface StoryVariant {
   id: string;
@@ -19,6 +21,10 @@ export interface StoryVariant {
 export interface CreativeImage {
   id: string;
   squareUrl: string;
+  /** Raw Cloudinary URL before any transforms — used to derive AI Fill & crop variants */
+  originalCloudinaryUrl: string;
+  /** Persisted custom crop URL — survives switching between Original / AI Fill */
+  customCropUrl: string;
   storyVariants: StoryVariant[];
   selectedStoryId: string;
 }
@@ -48,6 +54,8 @@ function createEmptyImage(): CreativeImage {
   return {
     id: crypto.randomUUID(),
     squareUrl: '',
+    originalCloudinaryUrl: '',
+    customCropUrl: '',
     storyVariants: [],
     selectedStoryId: '',
   };
@@ -91,6 +99,12 @@ function buildCloudinaryStoryVariants(cloudinaryUrl: string): StoryVariant[] {
     { id: crypto.randomUUID(), url: genFillUrl, type: 'generative_fill' },
     { id: crypto.randomUUID(), url: faceCropUrl, type: 'crop' },
   ];
+}
+
+// Build 1080x1080 AI Fill variant — pads any image to perfect square with AI-generated background
+function buildSquare1080AiFillUrl(cloudinaryUrl: string): string {
+  if (!cloudinaryUrl.includes('res.cloudinary.com')) return '';
+  return cloudinaryUrl.replace('/upload/', '/upload/b_gen_fill,c_pad,w_1080,h_1080/c_fill,g_auto/');
 }
 
 // Cloudinary signed upload — signature obtained from cloudinary-sign edge function
@@ -139,6 +153,47 @@ function ImageUploadBlock({ image, onChange, label, multiVariant }: ImageUploadB
   const [isUploading, setIsUploading] = useState(false);
   const [squareUrlValue, setSquareUrlValue] = useState('');
   const [storyUrlValue, setStoryUrlValue] = useState('');
+  const [cropDialogOpen, setCropDialogOpen] = useState(false);
+  const [cropTarget, setCropTarget] = useState<'square' | { storyId: string }>('square');
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  const aiFill1080Url = image.originalCloudinaryUrl ? buildSquare1080AiFillUrl(image.originalCloudinaryUrl) : '';
+  const isUsingAiFill = aiFill1080Url && image.squareUrl === aiFill1080Url;
+  const isUsingOriginal = image.originalCloudinaryUrl && image.squareUrl === image.originalCloudinaryUrl;
+  const hasCustomCrop = Boolean(image.customCropUrl);
+  const isUsingCustomCrop = hasCustomCrop && image.squareUrl === image.customCropUrl;
+
+  const selectSquareVariant = (url: string) => {
+    onChange({ ...image, squareUrl: url });
+  };
+
+  const openCropDialog = (target: 'square' | { storyId: string }) => {
+    setCropTarget(target);
+    setCropDialogOpen(true);
+  };
+
+  const handleCropApply = (croppedUrl: string) => {
+    if (cropTarget === 'square') {
+      // Persist the custom crop and select it
+      onChange({ ...image, squareUrl: croppedUrl, customCropUrl: croppedUrl });
+    } else {
+      const storyId = cropTarget.storyId;
+      onChange({
+        ...image,
+        storyVariants: image.storyVariants.map(v =>
+          v.id === storyId ? { ...v, url: croppedUrl } : v
+        ),
+      });
+    }
+  };
+
+  const getCropSourceUrl = (): string => {
+    if (cropTarget === 'square') {
+      return image.originalCloudinaryUrl || image.squareUrl;
+    }
+    const variant = image.storyVariants.find(v => v.id === cropTarget.storyId);
+    return variant?.url || '';
+  };
 
   const handleSquareUrlSet = () => {
     const url = squareUrlValue.trim();
@@ -188,9 +243,12 @@ function ImageUploadBlock({ image, onChange, label, multiVariant }: ImageUploadB
       try {
         const cloudinaryUrl = await uploadToCloudinary(file);
         const variants = buildCloudinaryStoryVariants(cloudinaryUrl);
+        // Always set squareUrl to the 1080x1080 AI Fill version
+        const square1080 = buildSquare1080AiFillUrl(cloudinaryUrl);
         onChange({
           ...image,
-          squareUrl: cloudinaryUrl,
+          squareUrl: square1080 || cloudinaryUrl,
+          originalCloudinaryUrl: cloudinaryUrl,
           storyVariants: variants,
           selectedStoryId: variants[0]?.id || '',
         });
@@ -244,7 +302,7 @@ function ImageUploadBlock({ image, onChange, label, multiVariant }: ImageUploadB
   };
 
   const removeSquare = () => {
-    onChange({ ...image, squareUrl: '', storyVariants: [], selectedStoryId: '' });
+    onChange({ ...image, squareUrl: '', originalCloudinaryUrl: '', customCropUrl: '', storyVariants: [], selectedStoryId: '' });
     setSquareUrlValue('');
     setStoryUrlValue('');
   };
@@ -265,23 +323,150 @@ function ImageUploadBlock({ image, onChange, label, multiVariant }: ImageUploadB
 
         {/* ── Upload Tab ── */}
         <TabsContent value="upload" className="mt-3">
-          <div className="flex gap-4 items-start">
+          <div className="flex gap-4 items-start flex-wrap">
+            {/* ── Square image + variants ── */}
             <div className="space-y-1.5">
               <span className="text-xs text-muted-foreground">Square (1080×1080)</span>
               {image.squareUrl ? (
-                <div className="relative group">
-                  <img src={image.squareUrl} alt="Square" className="w-36 h-36 object-cover rounded-lg border border-border" />
-                  {isUploading && (
-                    <div className="absolute inset-0 bg-background/60 rounded-lg flex items-center justify-center">
-                      <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                <div className="flex gap-2">
+                  {/* Original thumbnail — shown when AI Fill variant exists */}
+                  {aiFill1080Url && image.originalCloudinaryUrl && (
+                    <div className="relative group">
+                      <div
+                        onClick={() => selectSquareVariant(image.originalCloudinaryUrl)}
+                        className={cn(
+                          "w-36 h-36 rounded-lg border-2 cursor-pointer overflow-hidden transition-all relative",
+                          isUsingOriginal ? "border-primary ring-2 ring-primary/30" : "border-border hover:border-primary/40"
+                        )}
+                      >
+                        <img src={image.originalCloudinaryUrl} alt="Original" className="w-full h-full object-cover" />
+                        <div className="absolute bottom-0 inset-x-0 bg-background/80 text-[9px] text-center py-0.5 font-medium text-foreground">
+                          <Image className="w-2.5 h-2.5 inline mr-0.5" />Original
+                        </div>
+                      </div>
+                      <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setPreviewUrl(image.originalCloudinaryUrl); }}
+                          className="bg-background/80 text-foreground rounded-full p-1"
+                          title="Preview"
+                        >
+                          <Eye className="w-3 h-3" />
+                        </button>
+                        {!hasCustomCrop && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); openCropDialog('square'); }}
+                            className="bg-primary text-primary-foreground rounded-full p-1"
+                            title="Crop / Resize"
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </button>
+                        )}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); removeSquare(); }}
+                          className="bg-destructive text-destructive-foreground rounded-full p-1"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
                     </div>
                   )}
-                  <button
-                    onClick={removeSquare}
-                    className="absolute top-1 right-1 bg-destructive text-destructive-foreground rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
+
+                  {/* AI Fill 1080×1080 thumbnail */}
+                  {aiFill1080Url && (
+                    <div className="relative group">
+                      <div
+                        onClick={() => selectSquareVariant(aiFill1080Url)}
+                        className={cn(
+                          "w-36 h-36 rounded-lg border-2 cursor-pointer overflow-hidden transition-all relative",
+                          isUsingAiFill ? "border-primary ring-2 ring-primary/30" : "border-border hover:border-primary/40"
+                        )}
+                      >
+                        <img src={aiFill1080Url} alt="AI Fill 1080" className="w-full h-full object-cover" />
+                        <div className="absolute bottom-0 inset-x-0 bg-background/80 text-[9px] text-center py-0.5 font-medium text-foreground">
+                          <Wand2 className="w-2.5 h-2.5 inline mr-0.5" />AI Fill 1080
+                        </div>
+                      </div>
+                      <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setPreviewUrl(aiFill1080Url); }}
+                          className="bg-background/80 text-foreground rounded-full p-1"
+                          title="Preview"
+                        >
+                          <Eye className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Custom crop thumbnail — persisted, always shown once created */}
+                  {hasCustomCrop && (
+                    <div className="relative group">
+                      <div
+                        onClick={() => selectSquareVariant(image.customCropUrl)}
+                        className={cn(
+                          "w-36 h-36 rounded-lg border-2 cursor-pointer overflow-hidden transition-all relative",
+                          isUsingCustomCrop ? "border-primary ring-2 ring-primary/30" : "border-border hover:border-primary/40"
+                        )}
+                      >
+                        <img src={image.customCropUrl} alt="Cropped" className="w-full h-full object-cover" />
+                        <div className="absolute bottom-0 inset-x-0 bg-background/80 text-[9px] text-center py-0.5 font-medium text-foreground">
+                          <Crop className="w-2.5 h-2.5 inline mr-0.5" />Custom
+                        </div>
+                      </div>
+                      <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setPreviewUrl(image.customCropUrl); }}
+                          className="bg-background/80 text-foreground rounded-full p-1"
+                          title="Preview"
+                        >
+                          <Eye className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); openCropDialog('square'); }}
+                          className="bg-primary text-primary-foreground rounded-full p-1"
+                          title="Re-crop"
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Fallback: single thumbnail when no Cloudinary (blob URL) */}
+                  {!aiFill1080Url && (
+                    <div className="relative group">
+                      <img src={image.squareUrl} alt="Square" className="w-36 h-36 object-cover rounded-lg border border-border" />
+                      {isUploading && (
+                        <div className="absolute inset-0 bg-background/60 rounded-lg flex items-center justify-center">
+                          <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                        </div>
+                      )}
+                      <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setPreviewUrl(image.squareUrl); }}
+                          className="bg-background/80 text-foreground rounded-full p-1"
+                          title="Preview"
+                        >
+                          <Eye className="w-3 h-3" />
+                        </button>
+                        {image.originalCloudinaryUrl && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); openCropDialog('square'); }}
+                            className="bg-primary text-primary-foreground rounded-full p-1"
+                            title="Crop / Resize"
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </button>
+                        )}
+                        <button
+                          onClick={removeSquare}
+                          className="bg-destructive text-destructive-foreground rounded-full p-1"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div
@@ -319,12 +504,34 @@ function ImageUploadBlock({ image, onChange, label, multiVariant }: ImageUploadB
                           {v.type === 'manual' && <><Image className="w-2.5 h-2.5 inline mr-0.5" />Manual</>}
                         </div>
                       </div>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); removeStoryVariant(v.id); }}
-                        className="absolute -top-1.5 -right-1.5 bg-destructive text-destructive-foreground rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10"
-                      >
-                        <Trash2 className="w-2.5 h-2.5" />
-                      </button>
+                      <div className="absolute -top-1.5 -right-1.5 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                        {/* Eye icon on all story variants */}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setPreviewUrl(v.url); }}
+                          className="bg-background/80 text-foreground rounded-full p-0.5"
+                          title="Preview"
+                        >
+                          <Eye className="w-2.5 h-2.5" />
+                        </button>
+                        {/* Pencil/delete only on manual story variants */}
+                        {v.type === 'manual' && image.originalCloudinaryUrl && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); openCropDialog({ storyId: v.id }); }}
+                            className="bg-primary text-primary-foreground rounded-full p-0.5"
+                            title="Crop / Resize"
+                          >
+                            <Pencil className="w-2.5 h-2.5" />
+                          </button>
+                        )}
+                        {v.type === 'manual' && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); removeStoryVariant(v.id); }}
+                            className="bg-destructive text-destructive-foreground rounded-full p-0.5"
+                          >
+                            <Trash2 className="w-2.5 h-2.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ))}
                   <div
@@ -383,6 +590,23 @@ function ImageUploadBlock({ image, onChange, label, multiVariant }: ImageUploadB
           </div>
         </TabsContent>
       </Tabs>
+
+      {/* Crop Dialog */}
+      <ImageCropDialog
+        open={cropDialogOpen}
+        onClose={() => setCropDialogOpen(false)}
+        imageUrl={getCropSourceUrl()}
+        onCropApply={handleCropApply}
+      />
+
+      {/* Image Preview Dialog */}
+      <Dialog open={!!previewUrl} onOpenChange={(v) => !v && setPreviewUrl(null)}>
+        <DialogContent className="max-w-3xl p-2">
+          {previewUrl && (
+            <img src={previewUrl} alt="Preview" className="w-full h-auto max-h-[80vh] object-contain rounded-lg" />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -645,7 +869,9 @@ export function CreativeSection({ data, onChange }: CreativeSectionProps) {
               url: '',
               image: {
                 id: crypto.randomUUID(),
-                squareUrl: cloudinaryUrl,
+                squareUrl: buildSquare1080AiFillUrl(cloudinaryUrl) || cloudinaryUrl,
+                originalCloudinaryUrl: cloudinaryUrl,
+                customCropUrl: '',
                 storyVariants: variants,
                 selectedStoryId: variants[0]?.id || '',
               },
@@ -677,6 +903,8 @@ export function CreativeSection({ data, onChange }: CreativeSectionProps) {
         image: {
           id: crypto.randomUUID(),
           squareUrl: URL.createObjectURL(file),
+          originalCloudinaryUrl: '',
+          customCropUrl: '',
           storyVariants: [],
           selectedStoryId: '',
         },

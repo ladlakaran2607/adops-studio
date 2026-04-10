@@ -429,11 +429,20 @@ function buildAssetFeedCarouselCreative(ad: AdInput, ctx: CreativeCtx): Record<s
     }
   }
 
-  // ── Titles (per card from card.title) ──
-  const titles = cards.map((card: AdInput, i: number) => ({
-    text: card.title || '',
-    adlabels: [{ name: `title_${i + 1}` }],
-  }));
+  // ── Titles (deduplicated — Meta rejects duplicate text in titles[]) ──
+  // Cards with identical titles share one titles[] entry + label.
+  const titleTextToLabel = new Map<string, string>();
+  const titles: Array<{ text: string; adlabels: Array<{ name: string }> }> = [];
+  const cardTitleLabels: string[] = []; // per-card label lookup
+  cards.forEach((card: AdInput) => {
+    const text = card.title || '';
+    if (!titleTextToLabel.has(text)) {
+      const label = `title_${titles.length + 1}`;
+      titleTextToLabel.set(text, label);
+      titles.push({ text, adlabels: [{ name: label }] });
+    }
+    cardTitleLabels.push(titleTextToLabel.get(text)!);
+  });
 
   // ── Bodies (from shared primaryTexts, labeled sequentially) ──
   const bodies = primaryTexts.map((text: string, i: number) => ({
@@ -444,11 +453,19 @@ function buildAssetFeedCarouselCreative(ad: AdInput, ctx: CreativeCtx): Record<s
     bodies.push({ text: ' ', adlabels: [{ name: 'body_1' }] });
   }
 
-  // ── Link URLs (per card) ──
-  const linkUrls = cards.map((card: AdInput, i: number) => ({
-    website_url: isLeadAd ? 'http://fb.me/' : (card.url || ad.url || ''),
-    adlabels: [{ name: `link_store_${i + 1}` }],
-  }));
+  // ── Link URLs (deduplicated — same logic as titles) ──
+  const linkTextToLabel = new Map<string, string>();
+  const linkUrls: Array<{ website_url: string; adlabels: Array<{ name: string }> }> = [];
+  const cardLinkLabels: string[] = [];
+  cards.forEach((card: AdInput) => {
+    const url = isLeadAd ? 'http://fb.me/' : (card.url || ad.url || '');
+    if (!linkTextToLabel.has(url)) {
+      const label = `link_store_${linkUrls.length + 1}`;
+      linkTextToLabel.set(url, label);
+      linkUrls.push({ website_url: url, adlabels: [{ name: label }] });
+    }
+    cardLinkLabels.push(linkTextToLabel.get(url)!);
+  });
 
   // ── Build child_attachments for each carousel variant ──
   const hasAnyStory = cards.some((card: AdInput) => !!card.story_image_url);
@@ -461,9 +478,9 @@ function buildAssetFeedCarouselCreative(ad: AdInput, ctx: CreativeCtx): Record<s
       const bodyIdx = (i % bodies.length) + 1;
       return {
         image_label: { name: imgLabel },
-        title_label: { name: `title_${n}` },
+        title_label: { name: cardTitleLabels[i] },
         body_label: { name: `body_${bodyIdx}` },
-        link_url_label: { name: `link_store_${n}` },
+        link_url_label: { name: cardLinkLabels[i] },
       };
     });
 

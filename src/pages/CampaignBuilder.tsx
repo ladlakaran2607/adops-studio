@@ -2,12 +2,13 @@ import { useState, useEffect, useRef } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { AccountSelector } from '@/components/shared/AccountSelector';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Trash2, ChevronUp, ChevronDown, Copy, Loader2, CheckCircle2, AlertCircle, Rocket, Pencil } from 'lucide-react';
+import { Plus, Trash2, ChevronUp, ChevronDown, Copy, Loader2, CheckCircle2, AlertCircle, Rocket, Pencil, X } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { useTemplateStore, createEmptyCampaignTemplate, createEmptyAdsetTemplate, createEmptyAdTemplate, createEmptyAdvantageCreativeTemplate } from '@/store/templateStore';
 import { CampaignTemplateForm } from '@/components/templates/CampaignTemplateForm';
@@ -355,6 +356,22 @@ export default function CampaignBuilder() {
     setAdSets(sets => sets.map(s =>
       s.id === adSetId
         ? { ...s, ads: s.ads.map(a => a.id === adId ? { ...a, primaryTexts: a.primaryTexts.map((t, i) => i === index ? value : t) } : a) }
+        : s
+    ));
+  };
+
+  const removeHeadline = (adSetId: string, adId: string, index: number) => {
+    setAdSets(sets => sets.map(s =>
+      s.id === adSetId
+        ? { ...s, ads: s.ads.map(a => a.id === adId ? { ...a, headlines: a.headlines.filter((_, i) => i !== index) } : a) }
+        : s
+    ));
+  };
+
+  const removePrimaryText = (adSetId: string, adId: string, index: number) => {
+    setAdSets(sets => sets.map(s =>
+      s.id === adSetId
+        ? { ...s, ads: s.ads.map(a => a.id === adId ? { ...a, primaryTexts: a.primaryTexts.filter((_, i) => i !== index) } : a) }
         : s
     ));
   };
@@ -1195,7 +1212,14 @@ export default function CampaignBuilder() {
                                 <Label className="text-sm font-medium">Headlines</Label>
                                 <div className="space-y-2 mt-1.5">
                                   {ad.headlines.map((h, i) => (
-                                    <Input key={i} value={h} onChange={e => updateHeadline(adSet.id, ad.id, i, e.target.value)} placeholder={`Headline ${i + 1}`} />
+                                    <div key={i} className="flex gap-2 items-center">
+                                      <Input value={h} onChange={e => updateHeadline(adSet.id, ad.id, i, e.target.value)} placeholder={`Headline ${i + 1}`} className="flex-1" />
+                                      {ad.headlines.length > 1 && (
+                                        <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0 text-destructive hover:text-destructive" onClick={() => removeHeadline(adSet.id, ad.id, i)}>
+                                          <X className="w-3.5 h-3.5" />
+                                        </Button>
+                                      )}
+                                    </div>
                                   ))}
                                 </div>
                                 <Button variant="link" size="sm" onClick={() => addHeadline(adSet.id, ad.id)} className="text-primary px-0 mt-1">
@@ -1208,7 +1232,14 @@ export default function CampaignBuilder() {
                                 <Label className="text-sm font-medium">Primary Texts</Label>
                                 <div className="space-y-2 mt-1.5">
                                   {ad.primaryTexts.map((t, i) => (
-                                    <Input key={i} value={t} onChange={e => updatePrimaryText(adSet.id, ad.id, i, e.target.value)} placeholder={`Primary text ${i + 1}`} />
+                                    <div key={i} className="flex gap-2 items-start">
+                                      <Textarea value={t} onChange={e => updatePrimaryText(adSet.id, ad.id, i, e.target.value)} placeholder={`Primary text ${i + 1}`} rows={4} className="resize-y flex-1" />
+                                      {ad.primaryTexts.length > 1 && (
+                                        <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0 mt-0.5 text-destructive hover:text-destructive" onClick={() => removePrimaryText(adSet.id, ad.id, i)}>
+                                          <X className="w-3.5 h-3.5" />
+                                        </Button>
+                                      )}
+                                    </div>
                                   ))}
                                 </div>
                                 <Button variant="link" size="sm" onClick={() => addPrimaryText(adSet.id, ad.id)} className="text-primary px-0 mt-1">
