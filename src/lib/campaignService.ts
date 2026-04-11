@@ -470,16 +470,18 @@ function buildAssetFeedCarouselCreative(ad: AdInput, ctx: CreativeCtx): Record<s
   // ── Build child_attachments for each carousel variant ──
   const hasAnyStory = cards.some((card: AdInput) => !!card.story_image_url);
 
+  // Note: body_label is intentionally NOT bound to child_attachments. Binding
+  // bodies[] per-card makes Meta treat them as per-card descriptions, which
+  // don't render in story/reels carousel placements. Leaving bodies[] purely
+  // at the ad level lets it serve as the ad's primary text across all placements.
   const buildChildAttachments = (variant: 'feed' | 'story') =>
     cards.map((card: AdInput, i: number) => {
       const n = i + 1;
       const imgLabel = variant === 'story' && card.story_image_url
         ? `img_story_${n}` : `img_feed_${n}`;
-      const bodyIdx = (i % bodies.length) + 1;
       return {
         image_label: { name: imgLabel },
         title_label: { name: cardTitleLabels[i] },
-        body_label: { name: `body_${bodyIdx}` },
         link_url_label: { name: cardLinkLabels[i] },
       };
     });
@@ -524,10 +526,18 @@ function buildAssetFeedCarouselCreative(ad: AdInput, ctx: CreativeCtx): Record<s
   }
 
   // Placement optimization when story variants exist (ad set auto-disables is_dynamic_creative)
+  // Each rule must reference body_label + link_url_label so Meta knows which
+  // primary text and CTA link to render for that placement. Without the
+  // body_label binding at the rule level, story/reels carousel renders without
+  // the primary text even though bodies[] is present at the ad level.
   if (hasAnyStory) {
+    const bodyLabelName = (bodies[0]?.adlabels?.[0]?.name as string) || 'body_1';
+    const firstLinkLabel = cardLinkLabels[0] || 'link_store_1';
     assetFeedSpec.asset_customization_rules = [
       {
         carousel_label: { name: 'CAROUSEL_FEED' },
+        body_label: { name: bodyLabelName },
+        link_url_label: { name: firstLinkLabel },
         priority: 2,
         customization_spec: {
           publisher_platforms: ['facebook', 'instagram'],
@@ -537,6 +547,8 @@ function buildAssetFeedCarouselCreative(ad: AdInput, ctx: CreativeCtx): Record<s
       },
       {
         carousel_label: { name: 'CAROUSEL_STORY' },
+        body_label: { name: bodyLabelName },
+        link_url_label: { name: firstLinkLabel },
         priority: 1,
         customization_spec: {
           publisher_platforms: ['facebook', 'instagram'],
