@@ -125,14 +125,21 @@ function replaceTextEntries(
 }
 
 /**
- * Drop image_url whenever image_hash is present. Meta's GET returns both on
- * stored creatives but rejects re-posts that send both. Hashes are stable;
- * URLs are short-lived CDN links that may expire. Mutates in place.
+ * Meta returns image fields in two shapes on stored creatives and rejects
+ * any re-post that specifies BOTH a URL and a hash:
+ *   - `video_data`: uses `image_url` (thumbnail URL) + `image_hash`
+ *   - `link_data` / `child_attachments`: uses `picture` (image URL) + `image_hash`
+ *
+ * We always keep the hash and drop the URL — hashes are stable, URLs are
+ * short-lived CDN links that may expire. Mutates the target object in place.
  */
 function stripImageUrlConflict(obj: Record<string, unknown> | undefined): void {
   if (!obj) return;
   if (obj.image_hash && obj.image_url) {
     delete obj.image_url;
+  }
+  if (obj.image_hash && obj.picture) {
+    delete obj.picture;
   }
 }
 
