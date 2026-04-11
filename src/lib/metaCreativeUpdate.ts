@@ -410,6 +410,18 @@ function buildSimpleCarouselPayload(
   const oss = clone(creative.object_story_spec);
   const ld = oss.link_data;
 
+  // Strip stray top-level image fields when child_attachments is present.
+  // Some ads are created (via third-party tools or older Meta Ads Manager
+  // flows) with BOTH a top-level image_hash/picture AND child_attachments on
+  // link_data — an invalid-but-stored combination Meta only rejects on
+  // re-post. When we POST the creative, Meta auto-generates an
+  // interactive_components_spec that counts the top-level image as a slot,
+  // producing a child_attachments count mismatch (subcode 2446581,
+  // "interactive components spec mismatch"). Dropping the stray fields
+  // leaves a clean carousel shape Meta accepts.
+  delete ld.image_hash;
+  delete ld.picture;
+
   // Mirrors meta-fetch-ads/index.ts flattening:
   //   headlines[i]    ← child_attachments[i].name
   //   bodies[0]       ← link_data.message  (single shared body if present)
