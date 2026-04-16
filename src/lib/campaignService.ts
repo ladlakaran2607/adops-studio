@@ -294,45 +294,46 @@ function buildSimpleCarouselCreative(ad: AdInput, ctx: CreativeCtx): Record<stri
 function buildAssetFeedImageCreative(ad: AdInput, ctx: CreativeCtx): Record<string, unknown> {
   const isLeadAd = ctx.adSetConvLoc === 'On Ad' && ad.lead_form_id;
   const hasStory = !!ad.story_image_url;
-  // Placement rules needed when story variants exist (ad set auto-disables is_dynamic_creative)
-  const usePlacementRules = hasStory;
   const headlines = ad.headlines || [];
   const primaryTexts = ad.primary_texts || [];
 
   // ── Images ──
+  // Always use adlabels + placement rules so asset_feed_spec works without
+  // is_dynamic_creative on the ad set. When no story variant exists, the
+  // feed image is reused for story/reels placements.
   const images: Array<Record<string, unknown>> = [];
   if (ad.square_image_url) {
-    const img: Record<string, unknown> = { url: ad.square_image_url };
-    if (usePlacementRules) {
-      img.adlabels = [{ name: 'feed_image' }];
-      img.image_crops = { '100x100': [[0, 0], [1080, 1080]] };
-    }
-    images.push(img);
+    images.push({
+      url: ad.square_image_url,
+      adlabels: [{ name: 'feed_image' }],
+      image_crops: { '100x100': [[0, 0], [1080, 1080]] },
+    });
   }
-  if (ad.story_image_url) {
-    const storyImg: Record<string, unknown> = { url: ad.story_image_url };
-    if (usePlacementRules) {
-      storyImg.adlabels = [{ name: 'story_image' }];
-      storyImg.image_crops = { '90x160': [[0, 0], [1080, 1920]] };
-    }
-    images.push(storyImg);
+  if (hasStory) {
+    images.push({
+      url: ad.story_image_url,
+      adlabels: [{ name: 'story_image' }],
+      image_crops: { '90x160': [[0, 0], [1080, 1920]] },
+    });
+  } else if (ad.square_image_url) {
+    // No story variant — reuse feed image for story/reels placements.
+    images.push({
+      url: ad.square_image_url,
+      adlabels: [{ name: 'story_image' }],
+    });
   }
 
   // ── Titles & Bodies ──
   // All variants share the same adlabel so every placement rule uses ALL of them.
-  // Titles MUST be labeled when there are multiple variants + placement rules, otherwise
-  // Meta rejects with "Multiple titles assets cannot be applied to rule no. N".
-  const titles = headlines.map((t: string) => {
-    const entry: Record<string, unknown> = { text: t };
-    if (usePlacementRules) entry.adlabels = [{ name: 'title_var_1' }];
-    return entry;
-  });
+  const titles = headlines.map((t: string) => ({
+    text: t,
+    adlabels: [{ name: 'title_var_1' }],
+  }));
 
-  const bodies = primaryTexts.map((t: string) => {
-    const entry: Record<string, unknown> = { text: t };
-    if (usePlacementRules) entry.adlabels = [{ name: 'body_var_1' }];
-    return entry;
-  });
+  const bodies = primaryTexts.map((t: string) => ({
+    text: t,
+    adlabels: [{ name: 'body_var_1' }],
+  }));
 
   // ── Asset feed spec ──
   const assetFeedSpec: Record<string, unknown> = {
@@ -353,33 +354,32 @@ function buildAssetFeedImageCreative(ad: AdInput, ctx: CreativeCtx): Record<stri
     }];
   }
 
-  // ── Asset customization rules (placement-specific image assignment) ──
-  if (usePlacementRules) {
-    const feedRule: Record<string, unknown> = {
-      image_label: { name: 'feed_image' },
-      title_label: { name: 'title_var_1' },
-      body_label: { name: 'body_var_1' },
-      customization_spec: {
-        publisher_platforms: ['facebook', 'instagram'],
-        facebook_positions: ['feed'],
-        instagram_positions: ['stream', 'explore', 'explore_home'],
-      },
-    };
+  // ── Asset customization rules — always present ──
+  const storyImageLabel = hasStory ? 'story_image' : 'story_image';
+  const feedRule: Record<string, unknown> = {
+    image_label: { name: 'feed_image' },
+    title_label: { name: 'title_var_1' },
+    body_label: { name: 'body_var_1' },
+    customization_spec: {
+      publisher_platforms: ['facebook', 'instagram'],
+      facebook_positions: ['feed'],
+      instagram_positions: ['stream', 'explore', 'explore_home'],
+    },
+  };
 
-    const storyRule: Record<string, unknown> = {
-      image_label: { name: 'story_image' },
-      title_label: { name: 'title_var_1' },
-      body_label: { name: 'body_var_1' },
-      customization_spec: {
-        publisher_platforms: ['facebook', 'instagram'],
-        facebook_positions: ['story', 'facebook_reels'],
-        instagram_positions: ['story', 'reels'],
-      },
-    };
+  const storyRule: Record<string, unknown> = {
+    image_label: { name: storyImageLabel },
+    title_label: { name: 'title_var_1' },
+    body_label: { name: 'body_var_1' },
+    customization_spec: {
+      publisher_platforms: ['facebook', 'instagram'],
+      facebook_positions: ['story', 'facebook_reels'],
+      instagram_positions: ['story', 'reels'],
+    },
+  };
 
-    assetFeedSpec.asset_customization_rules = [feedRule, storyRule];
-    assetFeedSpec.optimization_type = 'PLACEMENT';
-  }
+  assetFeedSpec.asset_customization_rules = [feedRule, storyRule];
+  assetFeedSpec.optimization_type = 'PLACEMENT';
 
   // ── Final creative spec ──
   const spec: Record<string, unknown> = {
@@ -389,10 +389,6 @@ function buildAssetFeedImageCreative(ad: AdInput, ctx: CreativeCtx): Record<stri
     },
     asset_feed_spec: assetFeedSpec,
   };
-
-  if (ad.advantage_creative_config) {
-    spec.degrees_of_freedom_spec = { creative_features_spec: ad.advantage_creative_config };
-  }
 
   return spec;
 }
@@ -558,7 +554,6 @@ function buildAssetFeedCarouselCreative(ad: AdInput, ctx: CreativeCtx): Record<s
       },
     ];
     assetFeedSpec.optimization_type = 'PLACEMENT';
-    assetFeedSpec.audios = [{ type: 'random' }];
   }
 
   // ── Final creative spec ──
@@ -570,19 +565,20 @@ function buildAssetFeedCarouselCreative(ad: AdInput, ctx: CreativeCtx): Record<s
     asset_feed_spec: assetFeedSpec,
   };
 
-  if (ad.advantage_creative_config) {
-    spec.degrees_of_freedom_spec = { creative_features_spec: ad.advantage_creative_config };
-  }
-
   return spec;
 }
 
 // ══════════════════════════════════════════════════════════════════
 // 5. UPLOAD VIDEO TO META — returns video_id
 // ══════════════════════════════════════════════════════════════════
-async function uploadVideoToMeta(accountId: string, videoUrl: string): Promise<string> {
+interface VideoUploadResult {
+  videoId: string;
+  thumbnailUrl: string | null;
+}
+
+async function uploadVideoToMeta(accountId: string, videoUrl: string, name?: string): Promise<VideoUploadResult> {
   const res = await metaPost(accountId, `act_${accountId}/advideos`, {
-    name: 'API created Video Media',
+    name: name?.trim() || 'API created Video Media',
     file_url: videoUrl,
   });
   if (res.error) throw new Error(`Video upload failed: ${res.error.error_user_msg || res.error.message}`);
@@ -600,7 +596,17 @@ async function uploadVideoToMeta(accountId: string, videoUrl: string): Promise<s
       const videoStatus = statusRes.status?.video_status;
       console.log(`[Video Status] ${videoId}: ${videoStatus} (attempt ${attempt + 1}/${maxAttempts})`);
 
-      if (videoStatus === 'ready') return videoId;
+      if (videoStatus === 'ready') {
+        // Fetch auto-generated thumbnail
+        let thumbnailUrl: string | null = null;
+        try {
+          const thumbRes = await metaGet(accountId, `${videoId}/thumbnails`);
+          const thumbs = (thumbRes as { data?: Array<{ uri?: string }> }).data;
+          if (thumbs?.[0]?.uri) thumbnailUrl = thumbs[0].uri;
+          console.log(`[Video Thumbnail] ${videoId}: ${thumbnailUrl ? 'fetched' : 'none available'}`);
+        } catch { /* non-fatal — thumbnail is optional fallback */ }
+        return { videoId, thumbnailUrl };
+      }
       if (videoStatus === 'error') throw new Error('Video processing failed on Meta');
     } catch (err) {
       // If the status check fails, the video might still be processing — continue polling
@@ -611,7 +617,7 @@ async function uploadVideoToMeta(accountId: string, videoUrl: string): Promise<s
 
   // If we've waited ~60 seconds and still not ready, proceed anyway — Meta might accept it
   console.warn(`[Video Status] ${videoId}: Timed out waiting for ready status, proceeding anyway`);
-  return videoId;
+  return { videoId, thumbnailUrl: null };
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -631,7 +637,7 @@ function buildSimpleVideoCreative(ad: AdInput, ctx: CreativeCtx, videoId: string
     message: primaryTexts[0] || '',
     title: headlines[0] || '',
     video_id: videoId,
-    image_url: ad.thumbnail_url || '',
+    ...(ad.thumbnail_url ? { image_url: ad.thumbnail_url } : {}),
     call_to_action: {
       type: ad.call_to_action || (isLeadAd ? 'SIGN_UP' : 'SHOP_NOW'),
       value: ctaValue,
@@ -653,16 +659,32 @@ function buildSimpleVideoCreative(ad: AdInput, ctx: CreativeCtx, videoId: string
 // 7. ASSET FEED VIDEO — asset_feed_spec with videos
 //    Used when: SINGLE_VIDEO + multiple texts (multi-variant)
 // ══════════════════════════════════════════════════════════════════
-function buildAssetFeedVideoCreative(ad: AdInput, ctx: CreativeCtx, videoId: string): Record<string, unknown> {
+function buildAssetFeedVideoCreative(
+  ad: AdInput,
+  ctx: CreativeCtx,
+  videoId: string,
+  storyVideoId: string | null = null,
+): Record<string, unknown> {
   const isLeadAd = ctx.adSetConvLoc === 'On Ad' && ad.lead_form_id;
   const headlines = ad.headlines || [];
   const primaryTexts = ad.primary_texts || [];
+  const hasStoryVideo = !!storyVideoId;
 
-  // ── Videos — same video labeled for fb and ig placement rules ──
-  const videos = [
-    { video_id: videoId, adlabels: [{ name: 'labelfb' }], thumbnail_url: ad.thumbnail_url || undefined },
-    { video_id: videoId, adlabels: [{ name: 'labelig' }], thumbnail_url: ad.thumbnail_url || undefined },
-  ];
+  // ── Videos ──
+  // Without a story variant: same feed video labeled for both fb + ig.
+  // With a story variant: 4 labels (fb-feed, fb-story, ig-feed, ig-story),
+  //   feed positions use the 1:1/16:9 clip, story/reels use the 9:16 clip.
+  const videos: Array<Record<string, unknown>> = hasStoryVideo
+    ? [
+        { video_id: videoId, adlabels: [{ name: 'video_fb_feed' }], thumbnail_url: ad.thumbnail_url || undefined },
+        { video_id: videoId, adlabels: [{ name: 'video_ig_feed' }], thumbnail_url: ad.thumbnail_url || undefined },
+        { video_id: storyVideoId!, adlabels: [{ name: 'video_fb_story' }], thumbnail_url: ad.story_thumbnail_url || undefined },
+        { video_id: storyVideoId!, adlabels: [{ name: 'video_ig_story' }], thumbnail_url: ad.story_thumbnail_url || undefined },
+      ]
+    : [
+        { video_id: videoId, adlabels: [{ name: 'labelfb' }], thumbnail_url: ad.thumbnail_url || undefined },
+        { video_id: videoId, adlabels: [{ name: 'labelig' }], thumbnail_url: ad.thumbnail_url || undefined },
+      ];
 
   // ── Titles — all variants share same label so every rule uses ALL of them ──
   const titles = headlines.map((h: string) => ({
@@ -676,6 +698,66 @@ function buildAssetFeedVideoCreative(ad: AdInput, ctx: CreativeCtx, videoId: str
     adlabels: [{ name: 'body_var_1' }],
   }));
 
+  const customizationRules = hasStoryVideo
+    ? [
+        {
+          video_label: { name: 'video_fb_feed' },
+          title_label: { name: 'title_var_1' },
+          body_label: { name: 'body_var_1' },
+          customization_spec: {
+            publisher_platforms: ['facebook'],
+            facebook_positions: ['feed'],
+          },
+        },
+        {
+          video_label: { name: 'video_fb_story' },
+          title_label: { name: 'title_var_1' },
+          body_label: { name: 'body_var_1' },
+          customization_spec: {
+            publisher_platforms: ['facebook'],
+            facebook_positions: ['story', 'facebook_reels'],
+          },
+        },
+        {
+          video_label: { name: 'video_ig_feed' },
+          title_label: { name: 'title_var_1' },
+          body_label: { name: 'body_var_1' },
+          customization_spec: {
+            publisher_platforms: ['instagram'],
+            instagram_positions: ['stream', 'explore', 'explore_home'],
+          },
+        },
+        {
+          video_label: { name: 'video_ig_story' },
+          title_label: { name: 'title_var_1' },
+          body_label: { name: 'body_var_1' },
+          customization_spec: {
+            publisher_platforms: ['instagram'],
+            instagram_positions: ['story', 'reels'],
+          },
+        },
+      ]
+    : [
+        {
+          video_label: { name: 'labelfb' },
+          title_label: { name: 'title_var_1' },
+          body_label: { name: 'body_var_1' },
+          customization_spec: {
+            publisher_platforms: ['facebook'],
+            facebook_positions: ['feed', 'story', 'facebook_reels'],
+          },
+        },
+        {
+          video_label: { name: 'labelig' },
+          title_label: { name: 'title_var_1' },
+          body_label: { name: 'body_var_1' },
+          customization_spec: {
+            publisher_platforms: ['instagram'],
+            instagram_positions: ['stream', 'explore', 'explore_home', 'story', 'reels'],
+          },
+        },
+      ];
+
   // ── Asset feed spec ──
   const assetFeedSpec: Record<string, unknown> = {
     ad_formats: ['SINGLE_VIDEO'],
@@ -685,26 +767,7 @@ function buildAssetFeedVideoCreative(ad: AdInput, ctx: CreativeCtx, videoId: str
     descriptions: [{ text: ' ' }],
     call_to_action_types: [ad.call_to_action || (isLeadAd ? 'SIGN_UP' : 'SHOP_NOW')],
     link_urls: [{ website_url: isLeadAd ? 'http://fb.me/' : (ad.url || '') }],
-    asset_customization_rules: [
-      {
-        video_label: { name: 'labelfb' },
-        title_label: { name: 'title_var_1' },
-        body_label: { name: 'body_var_1' },
-        customization_spec: {
-          publisher_platforms: ['facebook'],
-          facebook_positions: ['feed', 'story', 'facebook_reels'],
-        },
-      },
-      {
-        video_label: { name: 'labelig' },
-        title_label: { name: 'title_var_1' },
-        body_label: { name: 'body_var_1' },
-        customization_spec: {
-          publisher_platforms: ['instagram'],
-          instagram_positions: ['stream', 'explore', 'explore_home', 'story', 'reels'],
-        },
-      },
-    ],
+    asset_customization_rules: customizationRules,
     optimization_type: 'PLACEMENT',
   };
 
@@ -724,10 +787,57 @@ function buildAssetFeedVideoCreative(ad: AdInput, ctx: CreativeCtx, videoId: str
     }];
   }
 
-  // ── Advantage creative ──
-  if (ad.advantage_creative_config) {
-    spec.degrees_of_freedom_spec = { creative_features_spec: ad.advantage_creative_config };
-  }
+  return spec;
+}
+
+/**
+ * 8. ADVANTAGE+ CATALOG AD — product_set_id + object_story_spec.template_data
+ *    Used when: ad.product_set_id is set (per-ad opt-in inside a regular campaign).
+ *    Meta fills in product image/name/price/url per impression from the catalog.
+ *    The user's headlines/primary text become the message + fallback copy; the
+ *    uploaded image (if any) is ignored — Meta uses the catalog's product imagery.
+ */
+function buildAdvantagePlusCatalogCreative(ad: AdInput, ctx: CreativeCtx): Record<string, unknown> {
+  const isLeadAd = ctx.adSetConvLoc === 'On Ad' && ad.lead_form_id;
+  // Meta rejects `{{product.url}}` in link fields at validation time — those
+  // need a concrete URL. At serve time, Meta overrides with the catalog
+  // product's actual URL anyway, so the static fallback here is just for
+  // validation + lets click-through work if the catalog product has no URL.
+  const fallbackLink = ad.url || 'https://www.facebook.com/';
+  const ctaValue = isLeadAd
+    ? { link: 'http://fb.me/', lead_gen_form_id: ad.lead_form_id }
+    : { link: fallbackLink };
+
+  // Headline + description: use the user-provided copy if set, else fall back
+  // to catalog tokens. Users typically want a static tagline ("Summer Sale")
+  // rather than the raw product name as the headline.
+  const userHeadline = (ad.headlines || []).find((h: string) => h?.trim());
+  const userDescription = (ad.descriptions || []).find((d: string) => d?.trim());
+
+  const templateData: Record<string, unknown> = {
+    name: userHeadline || '{{product.name}}',
+    description: userDescription || '{{product.description}}',
+    link: isLeadAd ? 'http://fb.me/' : fallbackLink,
+    message: (ad.primary_texts || [])[0] || '',
+    call_to_action: { type: ad.call_to_action || 'SHOP_NOW', value: ctaValue },
+  };
+
+  // Map UI creative type to Meta's format_option for catalog templates.
+  // CAROUSEL needs an explicit option; SINGLE_IMAGE/SINGLE_VIDEO use Meta defaults.
+  const creativeType = ad.creative_type || 'SINGLE_IMAGE';
+  if (creativeType === 'CAROUSEL') templateData.format_option = 'carousel_images_multi_items';
+
+  const objectStorySpec: Record<string, unknown> = {
+    page_id: ctx.pageId,
+    template_data: templateData,
+  };
+  if (ctx.instagramId) objectStorySpec.instagram_user_id = ctx.instagramId;
+
+  const spec: Record<string, unknown> = {
+    product_set_id: ad.product_set_id,
+    object_story_spec: objectStorySpec,
+  };
+  if (ad.product_catalog_id) spec.product_catalog_id = ad.product_catalog_id;
 
   return spec;
 }
@@ -1012,13 +1122,38 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
         // ── Dispatch to the right creative builder ──
         let creativeSpec: Record<string, unknown>;
 
-        if (isVideo) {
-          // Step: Upload video to Meta media library first
-          const videoId = await uploadVideoToMeta(account_id, adInput.video_url);
-          console.log(`[Video Upload] ${adInput.name} → video_id: ${videoId}`);
+        // Advantage+ catalog ad opt-in (per-ad, inside a regular campaign).
+        // Takes precedence over all other creative shapes — Meta builds the
+        // visible creative from the catalog's products, not the uploaded media.
+        if (adInput.product_set_id) {
+          if (!page_id) {
+            throw new Error(`Ad "${adInput.name}" uses Advantage+ catalog but the ad account has no page configured.`);
+          }
+          creativeSpec = buildAdvantagePlusCatalogCreative(adInput, ctx);
+        } else if (isVideo) {
+          // Upload the feed video. When the ad carries a 9:16 story video
+          // variant, upload that in parallel and pass both ids to the builder
+          // so asset_customization_rules can route feed vs story placements.
+          const hasStoryVideo = !!adInput.story_video_url;
+          const [feedResult, storyResult] = await Promise.all([
+            uploadVideoToMeta(account_id, adInput.video_url, hasStoryVideo ? `${adInput.name} — Feed` : adInput.name),
+            hasStoryVideo
+              ? uploadVideoToMeta(account_id, adInput.story_video_url, `${adInput.name} — Story`)
+              : Promise.resolve<VideoUploadResult | null>(null),
+          ]);
+          const videoId = feedResult.videoId;
+          const storyVideoId = storyResult?.videoId ?? null;
+          // Use user-provided thumbnail; fall back to Meta's auto-generated one.
+          if (!adInput.thumbnail_url && feedResult.thumbnailUrl) {
+            adInput.thumbnail_url = feedResult.thumbnailUrl;
+          }
+          if (!adInput.story_thumbnail_url && storyResult?.thumbnailUrl) {
+            adInput.story_thumbnail_url = storyResult.thumbnailUrl;
+          }
+          console.log(`[Video Upload] ${adInput.name} → feed video_id: ${videoId}${storyVideoId ? `, story video_id: ${storyVideoId}` : ''}`);
 
           if (needsAssetFeed) {
-            creativeSpec = buildAssetFeedVideoCreative(adInput, ctx, videoId);
+            creativeSpec = buildAssetFeedVideoCreative(adInput, ctx, videoId, storyVideoId);
           } else {
             creativeSpec = buildSimpleVideoCreative(adInput, ctx, videoId);
           }
@@ -1037,6 +1172,23 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
           creativeSpec = buildSimpleImageCreative(adInput, ctx);
         }
 
+        // Advantage+ creative — inject degrees_of_freedom_spec into every
+        // creative shape (simple + asset_feed). Individual builders used to
+        // handle this but only the asset_feed builders did; centralising here
+        // guarantees the DOF spec is always present when the user picked a
+        // template, regardless of creative shape.
+        if (adInput.advantage_creative_config) {
+          creativeSpec.degrees_of_freedom_spec = {
+            creative_features_spec: adInput.advantage_creative_config,
+          };
+        }
+
+        // Music — inject audios into asset_feed_spec when enabled.
+        // Only works on asset_feed_spec creatives; simple creatives are skipped.
+        if (adInput.enable_music && creativeSpec.asset_feed_spec) {
+          (creativeSpec.asset_feed_spec as Record<string, unknown>).audios = [{ type: 'random' }];
+        }
+
         // Create ad with inline creative (single POST to ads endpoint)
         const adParams: Record<string, unknown> = {
           name: adInput.name,
@@ -1046,6 +1198,12 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
         };
 
         if (adInput.url_parameters) adParams.url_tags = adInput.url_parameters;
+
+        // Per-ad delivery schedule (Meta's ad_schedule_*_time). Only included
+        // when the user actually picked dates — otherwise Meta treats the ad
+        // as always-on within the ad set window.
+        if (adInput.ad_schedule_start_time) adParams.ad_schedule_start_time = adInput.ad_schedule_start_time;
+        if (adInput.ad_schedule_end_time) adParams.ad_schedule_end_time = adInput.ad_schedule_end_time;
 
         // Tracking specs for pixel
         const effectivePixelId = tf.pixelId || tf.pixel_id || pixel_id;

@@ -23,6 +23,13 @@ import { launchCampaign, type LaunchResult } from '@/lib/campaignService';
 import { useAuth } from '@/contexts/AuthContext';
 import { useAdAccounts, getMissingAccountFields } from '@/hooks/useAdAccounts';
 import { useLeadForms } from '@/hooks/useLeadForms';
+import { useProductSets } from '@/hooks/useProductSets';
+import { useCatalogs } from '@/hooks/useCatalogs';
+import { useCampaigns } from '@/hooks/useCampaigns';
+import { useAdSets } from '@/hooks/useAdSets';
+import { Combobox } from '@/components/shared/Combobox';
+import { DateTimePicker } from '@/components/shared/DateTimePicker';
+import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 
 // ── Launch overlay quotes ──
@@ -132,6 +139,19 @@ interface AdEntry {
   id: string;
   name: string;
   productSetId: string;
+  // Catalog the productSetId belongs to. Captured when picking from the
+  // combobox; null otherwise. Required for Advantage+ catalog ad creative.
+  productCatalogId: string | null;
+  // Optional per-ad URL override. When set, takes precedence over the ad
+  // template's conversionDomain. Only surfaced for SINGLE_IMAGE/SINGLE_VIDEO —
+  // carousels use per-card URLs instead.
+  urlOverride: string;
+  // Optional per-ad delivery schedule (Meta's ad_schedule_start_time /
+  // ad_schedule_end_time). Empty string = not scheduled. Stored as an
+  // ISO-8601 local datetime string (no timezone); the launch flow appends
+  // the browser's timezone offset when sending to Meta.
+  scheduleStart: string;
+  scheduleEnd: string;
   headlines: string[];
   primaryTexts: string[];
   creative: CreativeData;
@@ -151,11 +171,33 @@ interface AdSetEntry {
   collapsed: boolean;
 }
 
+/**
+ * Convert a datetime-local string ("2026-06-02T14:30") to the ISO-8601 format
+ * Meta expects with the browser's timezone offset appended ("2026-06-02T14:30:00+0530").
+ * Returns null for empty input so callers can omit the field from the payload.
+ */
+function toMetaScheduleTime(local: string): string | null {
+  if (!local?.trim()) return null;
+  const d = new Date(local);
+  if (isNaN(d.getTime())) return null;
+  const offsetMin = -d.getTimezoneOffset();
+  const sign = offsetMin >= 0 ? '+' : '-';
+  const abs = Math.abs(offsetMin);
+  const hh = String(Math.floor(abs / 60)).padStart(2, '0');
+  const mm = String(abs % 60).padStart(2, '0');
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00${sign}${hh}${mm}`;
+}
+
 function createAd(index: number): AdEntry {
   return {
     id: crypto.randomUUID(),
     name: `Ad ${index}`,
     productSetId: '',
+    productCatalogId: null,
+    urlOverride: '',
+    scheduleStart: '',
+    scheduleEnd: '',
     headlines: [''],
     primaryTexts: [''],
     creative: createEmptyCreativeData(),
@@ -178,15 +220,110 @@ function createAdSet(index: number): AdSetEntry {
   };
 }
 
+/**
+ * Per-ad Product Set picker. Defaults to a plain ID input (no Meta call).
+ * Toggling "Pick from catalog" fetches the catalog's product sets via meta-proxy
+ * and swaps the input for a searchable combobox that still allows manual IDs.
+ */
+function ProductSetField({
+  accountId,
+  catalogId,
+  value,
+  onChange,
+}: {
+  accountId: string;
+  catalogId: string | null | undefined;
+  value: string;
+  // Bubbles BOTH the product set ID and the catalog ID it belongs to. Meta
+  // requires the catalog context to build an Advantage+ catalog creative,
+  // so we capture the resolved catalog at pick-time.
+  onChange: (productSetId: string, productCatalogId: string | null) => void;
+}) {
+  const [pickFromCatalog, setPickFromCatalog] = useState(false);
+  const [selectedCatalogId, setSelectedCatalogId] = useState('');
+  const effectiveCatalogId = catalogId || selectedCatalogId || null;
+  const shouldFetch = pickFromCatalog && !!accountId && !!effectiveCatalogId;
+  const { data: productSets, isLoading, error } = useProductSets(accountId, effectiveCatalogId, shouldFetch);
+  // Only fetch the catalog list when we actually need it (toggle on + template has no catalog).
+  const { data: catalogs, isLoading: loadingCatalogs, error: catalogsError } =
+    useCatalogs(accountId, pickFromCatalog && !catalogId);
+
+  const options = (productSets || []).map(p => ({ value: p.id, label: p.name }));
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mt-0.5">
+        <Label className="text-xs text-muted-foreground">Product Set ID (Optional)</Label>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-muted-foreground">Pick from catalog</span>
+          <Switch
+            checked={pickFromCatalog}
+            onCheckedChange={setPickFromCatalog}
+            disabled={!accountId}
+          />
+        </div>
+      </div>
+      {pickFromCatalog ? (
+        <div className="space-y-2 mt-1">
+          {!catalogId && (
+            <div>
+              <Label className="text-[10px] text-muted-foreground">Catalog</Label>
+              <Combobox
+                options={(catalogs || []).map(c => ({ value: c.id, label: c.name }))}
+                value={selectedCatalogId}
+                onChange={setSelectedCatalogId}
+                placeholder="Select a catalog..."
+                searchPlaceholder="Search catalogs..."
+                emptyText={catalogsError ? `Error: ${(catalogsError as Error).message}` : 'No catalogs found'}
+                loading={loadingCatalogs}
+                className="mt-1"
+              />
+              <p className="text-[10px] text-muted-foreground mt-1">
+                Tip: set a Catalog ID on the campaign template to skip this step next time.
+              </p>
+            </div>
+          )}
+          <Combobox
+            options={options}
+            value={value}
+            onChange={v => onChange(v, v ? effectiveCatalogId : null)}
+            placeholder={effectiveCatalogId ? 'Select Product Set...' : 'Pick a catalog above first'}
+            searchPlaceholder="Search..."
+            emptyText={error ? `Error: ${(error as Error).message}` : 'No product sets found'}
+            loading={isLoading}
+            disabled={!effectiveCatalogId}
+          />
+        </div>
+      ) : (
+        <Input
+          value={value}
+          onChange={e => onChange(e.target.value, e.target.value ? (catalogId || null) : null)}
+          placeholder="Product Set ID (Optional)"
+          className="mt-1"
+        />
+      )}
+    </div>
+  );
+}
+
 export default function CampaignBuilder() {
   const [accountId, setAccountId] = useState('');
   const [campaignType, setCampaignType] = useState<'new' | 'existing'>('new');
+
+  // Fetch campaigns + ad sets only when the builder is in "existing" mode and
+  // an account is chosen. React Query caches for 5 min so switching ad sets
+  // doesn't re-fetch.
+  const { data: existingCampaigns, isLoading: loadingCampaigns } =
+    useCampaigns(accountId, true);
+  const { data: existingAdSets, isLoading: loadingAdSets } =
+    useAdSets(accountId, true);
+
   const [campaignName, setCampaignName] = useState('');
   const [existingCampaignId, setExistingCampaignId] = useState('');
   const [campaignTemplateId, setCampaignTemplateId] = useState('');
   const [adSets, setAdSets] = useState<AdSetEntry[]>([createAdSet(1)]);
   const [isLaunching, setIsLaunching] = useState(false);
-  const [docImportOpen, setDocImportOpen] = useState(true);
+  const [docImportOpen, setDocImportOpen] = useState(false);
   const [launchQuote, setLaunchQuote] = useState('');
   const quoteIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -312,6 +449,10 @@ export default function CampaignBuilder() {
         id: crypto.randomUUID(),
         name: ad.name,
         productSetId: '',
+        productCatalogId: null,
+        urlOverride: '',
+        scheduleStart: '',
+        scheduleEnd: '',
         headlines: [''],
         primaryTexts: ad.primaryTexts,
         creative: createEmptyCreativeData(),
@@ -543,10 +684,12 @@ export default function CampaignBuilder() {
               creative_type: ad.creative.type,
               headlines: ad.headlines.filter(h => h.trim()),
               primary_texts: ad.primaryTexts.filter(t => t.trim()),
-              url: adTemplate?.conversionDomain || '',
+              url: ad.urlOverride.trim() || adTemplate?.conversionDomain || '',
               call_to_action: adTemplate?.callToAction || 'SHOP_NOW',
               url_parameters: adTemplate?.urlParameters || '',
               lead_form_id: ad.leadFormId || null,
+              product_set_id: ad.productSetId.trim() || null,
+              product_catalog_id: ad.productCatalogId || null,
               square_image_url: ad.creative.type === 'SINGLE_IMAGE'
                 ? (ad.creative.singleImage?.squareUrl || null)
                 : null,
@@ -559,6 +702,14 @@ export default function CampaignBuilder() {
               thumbnail_url: ad.creative.type === 'SINGLE_VIDEO'
                 ? (ad.creative.singleVideo?.thumbnailUrl || null)
                 : null,
+              story_video_url: ad.creative.type === 'SINGLE_VIDEO' && ad.creative.multiVariant
+                ? (ad.creative.singleVideo?.storyUrl || null)
+                : null,
+              story_thumbnail_url: ad.creative.type === 'SINGLE_VIDEO' && ad.creative.multiVariant
+                ? (ad.creative.singleVideo?.storyThumbnailUrl || null)
+                : null,
+              ad_schedule_start_time: toMetaScheduleTime(ad.scheduleStart),
+              ad_schedule_end_time: toMetaScheduleTime(ad.scheduleEnd),
               carousel_cards: ad.creative.type === 'CAROUSEL'
                 ? ad.creative.carouselCards
                   .filter(c => c.image.squareUrl)
@@ -572,24 +723,77 @@ export default function CampaignBuilder() {
                   }))
                 : [],
               advantage_creative_config: advantageTemplate ? (() => {
+                const s = (on: boolean) => ({ enroll_status: on ? 'OPT_IN' : 'OPT_OUT' });
+                const creativeType = ad.creative.type;
                 const img = advantageTemplate.imageEnhancements;
                 const vid = advantageTemplate.videoEnhancements;
-                const features: Record<string, { enroll_status: string }> = {};
-                // Map template toggles → Meta API individual feature keys
-                if (img?.visualTouchups) features.image_touchups = { enroll_status: 'OPT_IN' };
-                if (img?.textImprovements) features.text_optimizations = { enroll_status: 'OPT_IN' };
-                if (img?.imageAnimation) features.image_animation = { enroll_status: 'OPT_IN' };
-                if (img?.music) features.music_generation = { enroll_status: 'OPT_IN' };
-                if (img?.enhanceCta) features.generate_cta = { enroll_status: 'OPT_IN' };
-                if (img?.addOverlays) features.add_text_overlay = { enroll_status: 'OPT_IN' };
-                if (img?.expandImage) features.image_background_gen = { enroll_status: 'OPT_IN' };
-                if (img?.textTranslation) features.text_translation = { enroll_status: 'OPT_IN' };
-                if (img?.relevantComments) features.inline_comment = { enroll_status: 'OPT_IN' };
-                if (vid?.videoEffects) features.video_highlights = { enroll_status: 'OPT_IN' };
-                if (vid?.videoToImage) features.video_to_image = { enroll_status: 'OPT_IN' };
-                if (vid?.textTranslation) features.text_translation = { enroll_status: 'OPT_IN' };
+                const car = advantageTemplate.carouselEnhancements;
+                const cat = advantageTemplate.catalogEnhancements;
+                const hasCatalog = !!ad.productSetId.trim();
+
+                let features: Record<string, { enroll_status: string }> = {};
+
+                if (creativeType === 'SINGLE_IMAGE') {
+                  features = {
+                    image_touchups:                s(img.visualTouchups),
+                    image_brightness_and_contrast: s(img.adjustBrightnessContrast),
+                    text_translation:              s(img.textTranslation),
+                    image_animation:               s(img.imageAnimation),
+                    pac_relaxation:                s(img.flexibleMedia),
+                    enhance_cta:                   s(img.enhanceCta),
+                    image_templates:               s(img.addOverlays),
+                    image_uncrop:                  s(img.expandImage),
+                    text_optimizations:            s(img.textImprovements),
+                    inline_comment:                s(img.relevantComments),
+                    product_extensions:            s(img.addProductTags || img.addCatalogItems),
+                  };
+                } else if (creativeType === 'SINGLE_VIDEO') {
+                  features = {
+                    video_auto_crop:   s(vid.visualTouchups),
+                    video_highlights:  s(vid.videoEffects),
+                    text_translation:  s(vid.textTranslation),
+                    video_to_image:    s(vid.videoToImage),
+                    pac_relaxation:    s(vid.flexibleMedia),
+                    enhance_cta:       s(vid.enhanceCta),
+                    text_optimizations: s(vid.textImprovements),
+                    inline_comment:    s(vid.relevantComments),
+                    product_extensions: s(vid.addProductTags || vid.addCatalogItems),
+                  };
+                } else if (creativeType === 'CAROUSEL') {
+                  features = {
+                    media_type_automation: s(car.formatAutomation),
+                    multi_photo_to_video:  s(car.photosToVideo),
+                    media_order:           s(car.highlightCard),
+                    description_automation: s(car.dynamicDescription),
+                    profile_card:          s(car.profileEndCard),
+                    image_uncrop:          s(car.expandImage),
+                    image_templates:       s(car.addOverlays),
+                    enhance_cta:           s(car.enhanceCta),
+                    text_optimizations:    s(car.textImprovements),
+                    inline_comment:        s(car.relevantComments),
+                  };
+                }
+
+                // Catalog-specific features — layered on when the ad uses a product set
+                if (hasCatalog && cat) {
+                  features.adapt_to_placement    = s(cat.adaptToPlacement);
+                  features.media_type_automation = s(cat.dynamicMedia);
+                  features.description_automation = s(cat.dynamicDescription);
+                  features.add_text_overlay      = s(cat.dynamicOverlays);
+                  features.image_background_gen  = s(cat.generateBackground);
+                  features.site_extensions       = s(cat.siteLinks);
+                }
+
                 return Object.keys(features).length > 0 ? features : null;
               })() : null,
+              // Music — lives in asset_feed_spec.audios, not creative_features_spec.
+              // Only works on asset_feed_spec ads (multi-text or story variant).
+              enable_music: advantageTemplate ? (() => {
+                const creativeType = ad.creative.type;
+                if (creativeType === 'SINGLE_IMAGE') return !!advantageTemplate.imageEnhancements.music;
+                if (creativeType === 'SINGLE_VIDEO') return !!advantageTemplate.videoEnhancements.music;
+                return false;
+              })() : false,
             };
           }),
         };
@@ -822,13 +1026,9 @@ export default function CampaignBuilder() {
           </div>
           <div className={`overflow-hidden transition-all duration-300 ${docImportOpen ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0'}`}>
             <CardContent className="pt-0 pb-6">
-              <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-5">
-                {/* Left 2/3: Upload zone — stretch to match right side height */}
-                <div className="flex flex-col">
-                  <div className="flex-1">
-                    <DocumentImport onImport={handleDocumentImport} />
-                  </div>
-                </div>
+              <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-5 items-stretch">
+                {/* Left 2/3: Upload zone — stretches to match right side */}
+                <DocumentImport onImport={handleDocumentImport} />
                 {/* Right 1/3: Description + instructions */}
                 <div className="flex flex-col gap-3">
                   <div className="bg-accent/30 rounded-xl p-4 border border-primary/10">
@@ -963,14 +1163,21 @@ export default function CampaignBuilder() {
               </>
             ) : (
               <div className="max-w-md">
-                <Label>Existing Campaign ID</Label>
-                <Input
+                <Label>Existing Campaign</Label>
+                <Combobox
+                  options={(existingCampaigns || []).map(c => ({
+                    value: c.id,
+                    label: c.status && c.status !== 'ACTIVE' ? `${c.name} · ${c.status}` : c.name,
+                  }))}
                   value={existingCampaignId}
-                  onChange={e => setExistingCampaignId(e.target.value)}
-                  placeholder="Enter the Campaign ID"
+                  onChange={setExistingCampaignId}
+                  placeholder={accountId ? 'Select a campaign...' : 'Select an ad account first'}
+                  searchPlaceholder="Search by name..."
+                  emptyText={loadingCampaigns ? 'Loading...' : 'No campaigns found'}
+                  loading={loadingCampaigns}
+                  disabled={!accountId}
                   className="mt-1.5"
                 />
-                <p className="text-xs text-muted-foreground mt-1">The ID of the existing campaign in Meta</p>
               </div>
             )}
             </div>
@@ -1061,14 +1268,26 @@ export default function CampaignBuilder() {
                       </div>
                     ) : (
                       <div>
-                        <Label className="text-xs text-muted-foreground">Existing Ad Set ID</Label>
-                        <Input
+                        <Label className="text-xs text-muted-foreground">Existing Ad Set</Label>
+                        <Combobox
+                          options={(existingAdSets || [])
+                            .filter(as => !existingCampaignId || as.campaign_id === existingCampaignId)
+                            .map(as => ({
+                              value: as.id,
+                              label: as.status && as.status !== 'ACTIVE' ? `${as.name} · ${as.status}` : as.name,
+                            }))}
                           value={adSet.existingAdsetId}
-                          onChange={e => updateAdSet(adSet.id, { existingAdsetId: e.target.value })}
-                          placeholder="Enter the Ad Set ID"
+                          onChange={v => updateAdSet(adSet.id, { existingAdsetId: v })}
+                          placeholder={accountId ? 'Select an ad set...' : 'Select an ad account first'}
+                          searchPlaceholder="Search by name..."
+                          emptyText={loadingAdSets ? 'Loading...' : (existingCampaignId ? 'No ad sets in this campaign' : 'No ad sets found')}
+                          loading={loadingAdSets}
+                          disabled={!accountId}
                           className="mt-1.5"
                         />
-                        <p className="text-[10px] text-amber-600 mt-1">Use an ad set ID that belongs to the campaign above</p>
+                        {!existingCampaignId && (
+                          <p className="text-[10px] text-amber-600 mt-1">Pick a campaign above to narrow the list.</p>
+                        )}
                       </div>
                     )}
                     {adSet.type === 'new' && (
@@ -1132,10 +1351,14 @@ export default function CampaignBuilder() {
                                   <Label className="text-xs text-muted-foreground">Ad Name</Label>
                                   <Input value={ad.name} onChange={e => updateAd(adSet.id, ad.id, { name: e.target.value })} className="mt-1" />
                                 </div>
-                                <div>
-                                  <Label className="text-xs text-muted-foreground">Product Set ID (Optional)</Label>
-                                  <Input value={ad.productSetId} onChange={e => updateAd(adSet.id, ad.id, { productSetId: e.target.value })} placeholder="Product Set ID (Optional)" className="mt-1" />
-                                </div>
+                                <ProductSetField
+                                  accountId={accountId}
+                                  catalogId={campaignStore.items.find(t => t.id === campaignTemplateId)?.catalogId}
+                                  value={ad.productSetId}
+                                  onChange={(productSetId, productCatalogId) =>
+                                    updateAd(adSet.id, ad.id, { productSetId, productCatalogId })
+                                  }
+                                />
                               </div>
 
                               {/* Lead Form — shown when adset conversion location is "On Ad" */}
@@ -1189,12 +1412,11 @@ export default function CampaignBuilder() {
                                 <div>
                                   <Label className="text-xs text-muted-foreground uppercase font-medium">Advantage+ Creative</Label>
                                   <div className="flex items-center gap-1.5 mt-1">
-                                    <Select value={ad.advantageCreativeId} onValueChange={v => updateAd(adSet.id, ad.id, { advantageCreativeId: v })}>
+                                    <Select value={ad.advantageCreativeId} onValueChange={v => updateAd(adSet.id, ad.id, { advantageCreativeId: v === '_none' ? '' : v })}>
                                       <SelectTrigger><SelectValue placeholder="Select Advantage+ Template" /></SelectTrigger>
                                       <SelectContent>
-                                        {advantageStore.items.length === 0 ? (
-                                          <SelectItem value="_none" disabled>No templates</SelectItem>
-                                        ) : advantageStore.items.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
+                                        <SelectItem value="_none">None (Meta defaults)</SelectItem>
+                                        {advantageStore.items.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
                                       </SelectContent>
                                     </Select>
                                     <Button variant="outline" size="icon" className="h-9 w-9 shrink-0 border-primary/30 text-primary hover:bg-primary/10" title="Create new template" onClick={() => openCreateAdvantageTemplate(adSet.id, ad.id)}>
@@ -1254,6 +1476,52 @@ export default function CampaignBuilder() {
                                 data={ad.creative}
                                 onChange={(creative) => updateAd(adSet.id, ad.id, { creative })}
                               />
+
+                              {/* Per-ad URL override — image/video only (carousel uses per-card URLs) */}
+                              {(ad.creative.type === 'SINGLE_IMAGE' || ad.creative.type === 'SINGLE_VIDEO') && (() => {
+                                const templateUrl = adStore.items.find(t => t.id === ad.adTemplateId)?.conversionDomain;
+                                return (
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground">Destination URL (Optional)</Label>
+                                    <Input
+                                      value={ad.urlOverride}
+                                      onChange={e => updateAd(adSet.id, ad.id, { urlOverride: e.target.value })}
+                                      placeholder={templateUrl ? `Overrides template URL — ${templateUrl}` : 'https://example.com/landing'}
+                                      className="mt-1"
+                                    />
+                                    <p className="text-[10px] text-muted-foreground mt-1">
+                                      Leave blank to use the ad template's URL.
+                                    </p>
+                                  </div>
+                                );
+                              })()}
+
+                              {/* Per-ad delivery schedule — optional on any creative type */}
+                              <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                  <Label className="text-xs text-muted-foreground">Schedule Start (Optional)</Label>
+                                  <div className="mt-1">
+                                    <DateTimePicker
+                                      value={ad.scheduleStart}
+                                      onChange={v => updateAd(adSet.id, ad.id, { scheduleStart: v })}
+                                      placeholder="Pick start date & time"
+                                    />
+                                  </div>
+                                </div>
+                                <div>
+                                  <Label className="text-xs text-muted-foreground">Schedule End (Optional)</Label>
+                                  <div className="mt-1">
+                                    <DateTimePicker
+                                      value={ad.scheduleEnd}
+                                      onChange={v => updateAd(adSet.id, ad.id, { scheduleEnd: v })}
+                                      placeholder="Pick end date & time"
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                              <p className="text-[10px] text-muted-foreground -mt-2">
+                                Leave blank to run for the full ad set window. Times use your local timezone.
+                              </p>
                             </>
                           )}
                         </CardContent>

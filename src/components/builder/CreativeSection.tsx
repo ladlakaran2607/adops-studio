@@ -6,6 +6,7 @@ import { Card } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Upload, Trash2, Plus, Image, Wand2, Crop, Link, Images, Loader2, Video, CopyPlus, Pencil, Eye } from 'lucide-react';
+import { CREATIVE_URL_INPUT_ENABLED } from '@/lib/featureFlags';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -33,6 +34,11 @@ export interface CreativeVideo {
   id: string;
   url: string;
   thumbnailUrl: string;
+  // Optional 9:16 story/reels variant. When set alongside `url`, the launch
+  // flow uploads BOTH videos to Meta and routes the story clip to story/reels
+  // placements via asset_customization_rules.
+  storyUrl?: string;
+  storyThumbnailUrl?: string;
 }
 
 export interface CarouselCard {
@@ -312,14 +318,16 @@ function ImageUploadBlock({ image, onChange, label, multiVariant }: ImageUploadB
       {label && <Label className="text-xs text-muted-foreground font-medium">{label}</Label>}
 
       <Tabs defaultValue="upload" className="w-full">
-        <TabsList className="h-8">
-          <TabsTrigger value="upload" className="text-xs px-3 h-7">
-            <Upload className="w-3 h-3 mr-1.5" />Upload
-          </TabsTrigger>
-          <TabsTrigger value="url" className="text-xs px-3 h-7">
-            <Link className="w-3 h-3 mr-1.5" />URL
-          </TabsTrigger>
-        </TabsList>
+        {CREATIVE_URL_INPUT_ENABLED && (
+          <TabsList className="h-8">
+            <TabsTrigger value="upload" className="text-xs px-3 h-7">
+              <Upload className="w-3 h-3 mr-1.5" />Upload
+            </TabsTrigger>
+            <TabsTrigger value="url" className="text-xs px-3 h-7">
+              <Link className="w-3 h-3 mr-1.5" />URL
+            </TabsTrigger>
+          </TabsList>
+        )}
 
         {/* ── Upload Tab ── */}
         <TabsContent value="upload" className="mt-3">
@@ -548,7 +556,8 @@ function ImageUploadBlock({ image, onChange, label, multiVariant }: ImageUploadB
           </div>
         </TabsContent>
 
-        {/* ── URL Tab ── */}
+        {/* ── URL Tab (dev-only; flag-gated) ── */}
+        {CREATIVE_URL_INPUT_ENABLED && (
         <TabsContent value="url" className="mt-3">
           <div className="space-y-3">
             {image.squareUrl && (
@@ -589,6 +598,7 @@ function ImageUploadBlock({ image, onChange, label, multiVariant }: ImageUploadB
             )}
           </div>
         </TabsContent>
+        )}
       </Tabs>
 
       {/* Crop Dialog */}
@@ -611,51 +621,48 @@ function ImageUploadBlock({ image, onChange, label, multiVariant }: ImageUploadB
   );
 }
 
-// ── Video Upload Block ──
-interface VideoUploadBlockProps {
-  video: CreativeVideo;
-  onChange: (updated: CreativeVideo) => void;
+// ── Video slot (feed or story) — reusable inside VideoUploadBlock ──
+interface VideoSlotProps {
+  label: string;
+  videoUrl: string;
+  thumbnailUrl: string;
+  onVideoChange: (url: string) => void;
+  onThumbnailChange: (url: string) => void;
+  onRemove: () => void;
+  placeholder: string;
 }
 
-function VideoUploadBlock({ video, onChange }: VideoUploadBlockProps) {
+function VideoSlot({ label, videoUrl, thumbnailUrl, onVideoChange, onThumbnailChange, onRemove, placeholder }: VideoSlotProps) {
   const videoRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [videoUrlValue, setVideoUrlValue] = useState('');
   const [thumbUrlValue, setThumbUrlValue] = useState('');
 
-  const handleVideoUrlSet = () => {
+  const commitVideoUrl = () => {
     const url = videoUrlValue.trim();
     if (!url) return;
-    if (!url.startsWith('https://')) {
-      toast.error('Please enter a valid HTTPS URL');
-      return;
-    }
-    onChange({ ...video, url });
+    if (!url.startsWith('https://')) { toast.error('Please enter a valid HTTPS URL'); return; }
+    onVideoChange(url);
   };
 
-  const handleThumbUrlSet = () => {
+  const commitThumbUrl = () => {
     const url = thumbUrlValue.trim();
     if (!url) return;
-    if (!url.startsWith('https://')) {
-      toast.error('Please enter a valid HTTPS URL');
-      return;
-    }
-    onChange({ ...video, thumbnailUrl: url });
+    if (!url.startsWith('https://')) { toast.error('Please enter a valid HTTPS URL'); return; }
+    onThumbnailChange(url);
   };
 
   const handleVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     const blobUrl = URL.createObjectURL(file);
-    onChange({ ...video, url: blobUrl });
-
+    onVideoChange(blobUrl);
     if (cloudinaryConfigured) {
       setIsUploading(true);
       try {
         const cloudinaryUrl = await uploadToCloudinary(file, 'video');
-        onChange({ ...video, url: cloudinaryUrl });
-        toast.success('Video uploaded to Cloudinary');
+        onVideoChange(cloudinaryUrl);
+        toast.success(`${label} uploaded to Cloudinary`);
       } catch (err) {
         console.error('[Cloudinary Video Upload Error]', err);
         toast.error(`Video upload failed: ${(err as Error).message}`);
@@ -665,37 +672,38 @@ function VideoUploadBlock({ video, onChange }: VideoUploadBlockProps) {
     }
   };
 
-  const removeVideo = () => {
-    onChange({ ...video, url: '', thumbnailUrl: '' });
+  const remove = () => {
+    onRemove();
     setVideoUrlValue('');
     setThumbUrlValue('');
   };
 
   return (
     <div className="space-y-3">
+      <Label className="text-xs font-semibold text-foreground">{label}</Label>
       <Tabs defaultValue="upload" className="w-full">
-        <TabsList className="h-8">
-          <TabsTrigger value="upload" className="text-xs px-3 h-7">
-            <Upload className="w-3 h-3 mr-1.5" />Upload
-          </TabsTrigger>
-          <TabsTrigger value="url" className="text-xs px-3 h-7">
-            <Link className="w-3 h-3 mr-1.5" />URL
-          </TabsTrigger>
-        </TabsList>
-
-        {/* ── Upload Tab ── */}
+        {CREATIVE_URL_INPUT_ENABLED && (
+          <TabsList className="h-8">
+            <TabsTrigger value="upload" className="text-xs px-3 h-7">
+              <Upload className="w-3 h-3 mr-1.5" />Upload
+            </TabsTrigger>
+            <TabsTrigger value="url" className="text-xs px-3 h-7">
+              <Link className="w-3 h-3 mr-1.5" />URL
+            </TabsTrigger>
+          </TabsList>
+        )}
         <TabsContent value="upload" className="mt-3">
           <div className="space-y-3">
-            {video.url ? (
+            {videoUrl ? (
               <div className="relative group">
-                <video src={video.url} controls className="w-64 max-h-48 rounded-lg border border-border object-contain bg-black" />
+                <video src={videoUrl} controls className="w-64 max-h-48 rounded-lg border border-border object-contain bg-black" />
                 {isUploading && (
                   <div className="absolute inset-0 bg-background/60 rounded-lg flex items-center justify-center">
                     <Loader2 className="w-5 h-5 animate-spin text-primary" />
                   </div>
                 )}
                 <button
-                  onClick={removeVideo}
+                  onClick={remove}
                   className="absolute top-1 right-1 bg-destructive text-destructive-foreground rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
                 >
                   <Trash2 className="w-3 h-3" />
@@ -713,49 +721,86 @@ function VideoUploadBlock({ video, onChange }: VideoUploadBlockProps) {
             <input ref={videoRef} type="file" accept="video/*" className="hidden" onChange={handleVideoUpload} />
           </div>
         </TabsContent>
-
-        {/* ── URL Tab ── */}
-        <TabsContent value="url" className="mt-3">
-          <div className="space-y-3">
-            {video.url && (
-              <div className="flex items-center gap-2 mb-2">
-                <Video className="w-4 h-4 text-muted-foreground shrink-0" />
-                <span className="text-xs text-muted-foreground truncate flex-1">{video.url}</span>
-                <button onClick={removeVideo} className="text-destructive hover:text-destructive/80">
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+        {CREATIVE_URL_INPUT_ENABLED && (
+          <TabsContent value="url" className="mt-3">
+            <div className="space-y-3">
+              {videoUrl && (
+                <div className="flex items-center gap-2 mb-2">
+                  <Video className="w-4 h-4 text-muted-foreground shrink-0" />
+                  <span className="text-xs text-muted-foreground truncate flex-1">{videoUrl}</span>
+                  <button onClick={remove} className="text-destructive hover:text-destructive/80">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+              <div>
+                <Label className="text-xs text-muted-foreground">Video URL</Label>
+                <Input
+                  value={videoUrlValue}
+                  onChange={e => setVideoUrlValue(e.target.value)}
+                  placeholder={placeholder}
+                  className="h-8 text-xs mt-1"
+                  onKeyDown={e => e.key === 'Enter' && commitVideoUrl()}
+                  onBlur={commitVideoUrl}
+                />
               </div>
-            )}
-            <div>
-              <Label className="text-xs text-muted-foreground">Video URL</Label>
-              <Input
-                value={videoUrlValue}
-                onChange={e => setVideoUrlValue(e.target.value)}
-                placeholder="https://res.cloudinary.com/..."
-                className="h-8 text-xs mt-1"
-                onKeyDown={e => e.key === 'Enter' && handleVideoUrlSet()}
-                onBlur={handleVideoUrlSet}
-              />
             </div>
-          </div>
-        </TabsContent>
+          </TabsContent>
+        )}
       </Tabs>
 
-      {/* Thumbnail — always visible when video is set */}
+      {/* Thumbnail — always visible */}
       <div>
-        <Label className="text-xs text-muted-foreground">Thumbnail Image URL (required by Meta)</Label>
+        <Label className="text-xs text-muted-foreground">Thumbnail Image URL (Optional)</Label>
         <Input
           value={thumbUrlValue}
           onChange={e => setThumbUrlValue(e.target.value)}
           placeholder="https://res.cloudinary.com/..."
           className="h-8 text-xs mt-1"
-          onKeyDown={e => e.key === 'Enter' && handleThumbUrlSet()}
-          onBlur={handleThumbUrlSet}
+          onKeyDown={e => e.key === 'Enter' && commitThumbUrl()}
+          onBlur={commitThumbUrl}
         />
-        {video.thumbnailUrl && (
-          <img src={video.thumbnailUrl} alt="Thumbnail" className="w-20 h-20 object-cover rounded border border-border mt-2" />
+        <p className="text-[10px] text-muted-foreground mt-1">
+          Leave blank and Meta will auto-generate from the video's first frame.
+        </p>
+        {thumbnailUrl && (
+          <img src={thumbnailUrl} alt="Thumbnail" className="w-20 h-20 object-cover rounded border border-border mt-2" />
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Video Upload Block — renders feed + optional story slot ──
+interface VideoUploadBlockProps {
+  video: CreativeVideo;
+  onChange: (updated: CreativeVideo) => void;
+  multiVariant: boolean;
+}
+
+function VideoUploadBlock({ video, onChange, multiVariant }: VideoUploadBlockProps) {
+  return (
+    <div className={multiVariant ? 'flex gap-6 flex-wrap' : ''}>
+      <VideoSlot
+        label={multiVariant ? 'Feed Video (1:1)' : 'Video'}
+        videoUrl={video.url}
+        thumbnailUrl={video.thumbnailUrl}
+        onVideoChange={url => onChange({ ...video, url })}
+        onThumbnailChange={url => onChange({ ...video, thumbnailUrl: url })}
+        onRemove={() => onChange({ ...video, url: '', thumbnailUrl: '' })}
+        placeholder="https://res.cloudinary.com/..."
+      />
+      {multiVariant && (
+        <VideoSlot
+          label="Story / Reels Video (9:16)"
+          videoUrl={video.storyUrl || ''}
+          thumbnailUrl={video.storyThumbnailUrl || ''}
+          onVideoChange={url => onChange({ ...video, storyUrl: url })}
+          onThumbnailChange={url => onChange({ ...video, storyThumbnailUrl: url })}
+          onRemove={() => onChange({ ...video, storyUrl: '', storyThumbnailUrl: '' })}
+          placeholder="https://res.cloudinary.com/..."
+        />
+      )}
     </div>
   );
 }
@@ -984,6 +1029,7 @@ export function CreativeSection({ data, onChange }: CreativeSectionProps) {
         <VideoUploadBlock
           video={data.singleVideo || createEmptyVideo()}
           onChange={updateSingleVideo}
+          multiVariant={data.multiVariant}
         />
       )}
 

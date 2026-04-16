@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { cn } from '@/lib/utils';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -123,14 +124,37 @@ const catalogFields: ToggleField<CatalogEnhancements>[] = [
 function EnhancementSection({ title, icon: Icon, fields, values, onChange }: {
   title: string; icon: React.ElementType; fields: { key: string; label: string }[]; values: any; onChange: (key: string, val: boolean) => void;
 }) {
+  const parentField = fields.find(f => f.key === 'advantageCreative');
+  const featureFields = fields.filter(f => f.key !== 'advantageCreative');
+  const isParentOn = parentField ? !!values[parentField.key] : true;
+
   return (
     <Card>
       <CardHeader>
         <CardTitle className="text-base flex items-center gap-2"><Icon className="w-4 h-4" />{title}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
-        {fields.map(({ key, label }) => (
-          <div key={String(key)} className="flex items-center justify-between">
+        {parentField && (
+          <>
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-sm font-semibold">{parentField.label}</Label>
+                <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug max-w-xs">
+                  {isParentOn
+                    ? 'Enhancements below will be sent to Meta exactly as toggled — ON or OFF.'
+                    : 'Off — Meta will use its own default enhancements. Toggle on for full control.'}
+                </p>
+              </div>
+              <Switch checked={isParentOn} onCheckedChange={v => onChange(parentField.key, v)} />
+            </div>
+            <hr className="border-border" />
+          </>
+        )}
+        {featureFields.map(({ key, label }) => (
+          <div key={String(key)} className={cn(
+            "flex items-center justify-between",
+            parentField && !isParentOn && 'opacity-40 pointer-events-none',
+          )}>
             <Label className="text-sm">{label}</Label>
             <Switch checked={values[key] as boolean} onCheckedChange={v => onChange(key, v)} />
           </div>

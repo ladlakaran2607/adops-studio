@@ -172,13 +172,19 @@ export default function BulkUploader() {
       // verbatim — same structural handling (OSS preserved, DOF sanitized,
       // dangling-label validation, image_url/image_hash conflict resolution)
       // that fixed AdsProcessing's Push to Meta flow.
-      const adCreatives: Record<string, { name: string; payload: Record<string, unknown>; trackingSpecs?: unknown }> = {};
+      const adCreatives: Record<string, {
+        name: string;
+        payload: Record<string, unknown>;
+        trackingSpecs?: unknown;
+        scheduleStart?: string;
+        scheduleEnd?: string;
+      }> = {};
 
       for (const adId of adIds) {
         try {
           const adData = await metaGet(
             accountId,
-            `${adId}?fields=name,tracking_specs,creative{id,name,asset_feed_spec,object_story_spec,degrees_of_freedom_spec,url_tags}`
+            `${adId}?fields=name,tracking_specs,ad_schedule_start_time,ad_schedule_end_time,creative{id,name,asset_feed_spec,object_story_spec,degrees_of_freedom_spec,url_tags}`
           );
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const creative = (adData as any)?.creative;
@@ -195,6 +201,10 @@ export default function BulkUploader() {
             payload,
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             trackingSpecs: (adData as any)?.tracking_specs,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            scheduleStart: (adData as any)?.ad_schedule_start_time,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            scheduleEnd: (adData as any)?.ad_schedule_end_time,
           };
         } catch (err) {
           // If we can't fetch or build this ad's creative, skip all its
@@ -223,12 +233,16 @@ export default function BulkUploader() {
             if (!newCreativeId) throw new Error('Meta did not return a creative id');
 
             const adParams: Record<string, unknown> = {
-              name: `${adInfo.name} (copy)`,
+              name: adInfo.name,
               adset_id: adsetId,
               status: 'PAUSED',
               creative: { creative_id: newCreativeId },
             };
             if (adInfo.trackingSpecs) adParams.tracking_specs = adInfo.trackingSpecs;
+            // Preserve per-ad delivery schedule on each clone so duplicated
+            // ads keep the same start/end window as the source.
+            if (adInfo.scheduleStart) adParams.ad_schedule_start_time = adInfo.scheduleStart;
+            if (adInfo.scheduleEnd) adParams.ad_schedule_end_time = adInfo.scheduleEnd;
 
             await metaPost(accountId, `act_${accountId}/ads`, adParams);
             successCount++;

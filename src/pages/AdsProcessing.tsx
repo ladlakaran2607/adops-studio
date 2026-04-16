@@ -10,6 +10,7 @@ import { RefreshCw, Sparkles, Check, X, ChevronDown, ChevronUp, Pencil, Download
 import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
 import { AccountSelector } from '@/components/shared/AccountSelector';
+import { MultiSelect } from '@/components/shared/MultiSelect';
 import { useAdAccounts, getMissingAccountFields } from '@/hooks/useAdAccounts';
 import { invokeEdgeFunction } from '@/lib/edgeFunctions';
 import { bulkEditAds } from '@/lib/openaiClient';
@@ -30,6 +31,15 @@ interface Ad {
   descriptions: string[];    // descriptions array from asset_feed_spec
   status: 'ACTIVE' | 'PAUSED' | 'ARCHIVED';
   adType: 'IMAGE' | 'VIDEO' | 'CAROUSEL';
+  campaignId: string | null;
+  campaignName: string | null;
+  adsetId: string | null;
+  adsetName: string | null;
+  // Per-ad delivery schedule from Meta (ISO-8601 with offset). Display-only;
+  // AI Bulk Edit's push-to-Meta flow only rebinds creative, so these fields
+  // survive untouched on the ad itself.
+  scheduleStart: string | null;
+  scheduleEnd: string | null;
   selected: boolean;
   modified: boolean;         // true after accepting AI suggestions (pending push to Meta)
   aiSuggestion?: string;     // JSON of { headlines: string[], bodies: string[], descriptions: string[] }
@@ -42,6 +52,12 @@ interface MetaFetchAdsResponse {
     name: string;
     status: string;
     ad_type: string;
+    campaign_id?: string | null;
+    campaign_name?: string | null;
+    adset_id?: string | null;
+    adset_name?: string | null;
+    ad_schedule_start_time?: string | null;
+    ad_schedule_end_time?: string | null;
     headlines: string[];
     bodies: string[];
     descriptions: string[];
@@ -102,6 +118,8 @@ export default function AdsProcessing() {
   const [bodyFilter, setBodyFilter] = useState('');
   const [adTypeFilter, setAdTypeFilter] = useState('all');
   const [generalFilter, setGeneralFilter] = useState('');
+  const [campaignFilter, setCampaignFilter] = useState<string[]>([]);
+  const [adsetFilter, setAdsetFilter] = useState<string[]>([]);
   const [activeOnly, setActiveOnly] = useState(false);
   const [ads, setAds] = useState<Ad[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -175,11 +193,40 @@ export default function AdsProcessing() {
   const matchesAny = (arr: string[], q: string) =>
     arr.some(t => t.toLowerCase().includes(q.toLowerCase()));
 
+  // Campaign + ad set options derived from loaded ads.
+  // Ad set list cascades: when campaigns are selected, restrict to their ad sets;
+  // otherwise show ad sets from every loaded ad.
+  const campaignOptions = (() => {
+    const map = new Map<string, string>();
+    ads.forEach(a => { if (a.campaignId) map.set(a.campaignId, a.campaignName || a.campaignId); });
+    return Array.from(map, ([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label));
+  })();
+
+  const adsetOptions = (() => {
+    const map = new Map<string, string>();
+    const scope = campaignFilter.length > 0
+      ? ads.filter(a => a.campaignId && campaignFilter.includes(a.campaignId))
+      : ads;
+    scope.forEach(a => { if (a.adsetId) map.set(a.adsetId, a.adsetName || a.adsetId); });
+    return Array.from(map, ([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label));
+  })();
+
+  // Drop ad set selections that no longer belong to the active campaign scope.
+  useEffect(() => {
+    if (adsetFilter.length === 0) return;
+    const valid = new Set(adsetOptions.map(o => o.value));
+    const pruned = adsetFilter.filter(id => valid.has(id));
+    if (pruned.length !== adsetFilter.length) setAdsetFilter(pruned);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaignFilter, ads]);
+
   // Filter logic — searches across ALL text variants
   const filteredAds = ads.filter(ad => {
     if (headlineFilter && !matchesAny(ad.headlines, headlineFilter)) return false;
     if (bodyFilter && !matchesAny(ad.bodies, bodyFilter)) return false;
     if (adTypeFilter !== 'all' && ad.adType !== adTypeFilter) return false;
+    if (campaignFilter.length > 0 && (!ad.campaignId || !campaignFilter.includes(ad.campaignId))) return false;
+    if (adsetFilter.length > 0 && (!ad.adsetId || !adsetFilter.includes(ad.adsetId))) return false;
     if (generalFilter) {
       const q = generalFilter;
       if (
@@ -234,6 +281,12 @@ export default function AdsProcessing() {
         descriptions: a.descriptions || [],
         status: (a.status || 'ACTIVE') as Ad['status'],
         adType: (a.ad_type || 'IMAGE') as Ad['adType'],
+        campaignId: a.campaign_id ?? null,
+        campaignName: a.campaign_name ?? null,
+        adsetId: a.adset_id ?? null,
+        adsetName: a.adset_name ?? null,
+        scheduleStart: a.ad_schedule_start_time ?? null,
+        scheduleEnd: a.ad_schedule_end_time ?? null,
         selected: false,
         modified: false,
       }));
@@ -575,13 +628,29 @@ export default function AdsProcessing() {
               </div>
             )}
 
-            {/* Filter inputs row */}
+            {/* Row 1 — scope filters: which campaigns/ad sets/types */}
             <div className="grid grid-cols-12 gap-4">
-              <div className="col-span-3">
-                <Input value={headlineFilter} onChange={e => setHeadlineFilter(e.target.value)} placeholder="Headline contains..." className="bg-muted/50" />
+              <div className="col-span-4">
+                <MultiSelect
+                  options={campaignOptions}
+                  value={campaignFilter}
+                  onChange={setCampaignFilter}
+                  placeholder={ads.length === 0 ? 'Campaigns (load ads first)' : 'All campaigns'}
+                  searchPlaceholder="Search campaigns..."
+                  emptyText="No campaigns"
+                  disabled={ads.length === 0}
+                />
               </div>
-              <div className="col-span-3">
-                <Input value={bodyFilter} onChange={e => setBodyFilter(e.target.value)} placeholder="Body contains..." className="bg-muted/50" />
+              <div className="col-span-4">
+                <MultiSelect
+                  options={adsetOptions}
+                  value={adsetFilter}
+                  onChange={setAdsetFilter}
+                  placeholder={ads.length === 0 ? 'Ad sets (load ads first)' : 'All ad sets'}
+                  searchPlaceholder="Search ad sets..."
+                  emptyText="No ad sets"
+                  disabled={ads.length === 0}
+                />
               </div>
               <div className="col-span-2">
                 <Select value={adTypeFilter} onValueChange={setAdTypeFilter}>
@@ -594,14 +663,24 @@ export default function AdsProcessing() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="col-span-2">
-                <Input value={generalFilter} onChange={e => setGeneralFilter(e.target.value)} placeholder="Search ID" className="bg-muted/50" />
-              </div>
               <div className="col-span-2 flex items-center justify-end">
                 <div className="flex items-center gap-2">
                   <Checkbox checked={activeOnly} onCheckedChange={(v) => setActiveOnly(v === true)} id="active-only" />
                   <Label htmlFor="active-only" className="text-sm font-medium text-muted-foreground cursor-pointer">Active only</Label>
                 </div>
+              </div>
+            </div>
+
+            {/* Row 2 — text search */}
+            <div className="grid grid-cols-12 gap-4 mt-4">
+              <div className="col-span-4">
+                <Input value={headlineFilter} onChange={e => setHeadlineFilter(e.target.value)} placeholder="Headline contains..." className="bg-muted/50" />
+              </div>
+              <div className="col-span-4">
+                <Input value={bodyFilter} onChange={e => setBodyFilter(e.target.value)} placeholder="Body contains..." className="bg-muted/50" />
+              </div>
+              <div className="col-span-4">
+                <Input value={generalFilter} onChange={e => setGeneralFilter(e.target.value)} placeholder="Search ID or text across all fields..." className="bg-muted/50" />
               </div>
             </div>
 
@@ -767,6 +846,14 @@ export default function AdsProcessing() {
                           {ad.modified && (
                             <span className="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-amber-50 text-amber-600 flex items-center gap-1">
                               <Pencil className="w-3 h-3" /> Modified
+                            </span>
+                          )}
+                          {(ad.scheduleStart || ad.scheduleEnd) && (
+                            <span
+                              className="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-indigo-50 text-indigo-600"
+                              title={`Scheduled delivery: ${ad.scheduleStart ? new Date(ad.scheduleStart).toLocaleString() : '—'} → ${ad.scheduleEnd ? new Date(ad.scheduleEnd).toLocaleString() : '—'}`}
+                            >
+                              Scheduled
                             </span>
                           )}
                         </div>

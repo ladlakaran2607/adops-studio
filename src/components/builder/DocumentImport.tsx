@@ -154,7 +154,7 @@ export function DocumentImport({ onImport }: DocumentImportProps) {
   };
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 h-full flex flex-col">
       <input
         ref={fileRef}
         type="file"
