@@ -29,6 +29,7 @@ interface ExistingAd {
   headline: string;
   body: string;
   campaignName: string;
+  adsetName: string;
   adType: 'IMAGE' | 'VIDEO' | 'CAROUSEL';
 }
 
@@ -39,6 +40,8 @@ interface MetaFetchAdsResponse {
     ad_type: string;
     campaign_id?: string;
     campaign_name?: string;
+    adset_id?: string;
+    adset_name?: string;
     headlines: string[];
     bodies: string[];
   }>;
@@ -109,7 +112,8 @@ export default function BulkUploader() {
     return ad.name.toLowerCase().includes(q) ||
       ad.id.toLowerCase().includes(q) ||
       ad.headline.toLowerCase().includes(q) ||
-      ad.campaignName.toLowerCase().includes(q);
+      ad.campaignName.toLowerCase().includes(q) ||
+      ad.adsetName.toLowerCase().includes(q);
   });
 
   const toggleAd = (id: string) => {
@@ -137,6 +141,7 @@ export default function BulkUploader() {
         headline: a.headlines?.[0] || '',
         body: a.bodies?.[0] || '',
         campaignName: a.campaign_name || '',
+        adsetName: a.adset_name || '',
         adType: (a.ad_type || 'IMAGE') as ExistingAd['adType'],
       }));
       const mappedAdSets: AdSet[] = (adsetsData.ad_sets || []).map(as => ({
@@ -234,12 +239,13 @@ export default function BulkUploader() {
         if (!adInfo) continue; // Skipped during build
 
         for (const adsetId of adSetIds) {
+          let adParams: Record<string, unknown> = {};
           try {
             const createRes = await metaPost(accountId, `act_${accountId}/adcreatives`, adInfo.payload);
             const newCreativeId = (createRes as { id?: string }).id;
             if (!newCreativeId) throw new Error('Meta did not return a creative id');
 
-            const adParams: Record<string, unknown> = {
+            adParams = {
               name: adInfo.name,
               adset_id: adsetId,
               status: 'PAUSED',
@@ -382,7 +388,7 @@ export default function BulkUploader() {
                   <Input
                     value={existingAdSearch}
                     onChange={e => setExistingAdSearch(e.target.value)}
-                    placeholder="Search by ad name, ID, headline or campaign..."
+                    placeholder="Search by ad name, ID, headline, campaign or ad set..."
                     className="pl-10 bg-transparent border-0 border-b border-border rounded-none focus-visible:ring-0 focus-visible:border-primary transition-colors"
                   />
                 </div>
@@ -412,6 +418,11 @@ export default function BulkUploader() {
                         <p className="text-[10px] text-muted-foreground/60 font-mono mt-0.5 uppercase truncate">
                           {ad.campaignName ? `Campaign: ${ad.campaignName}` : `ID: ${ad.id}`}
                         </p>
+                        {ad.adsetName && (
+                          <p className="text-[10px] text-muted-foreground/60 font-mono uppercase truncate">
+                            Ad Set: {ad.adsetName}
+                          </p>
+                        )}
                       </div>
                     </div>
                   );

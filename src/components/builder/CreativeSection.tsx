@@ -785,15 +785,23 @@ interface VideoUploadBlockProps {
 }
 
 function VideoUploadBlock({ video, onChange, multiVariant }: VideoUploadBlockProps) {
+  // Ref holds the latest video so async upload callbacks don't use stale state.
+  // Without this, uploading feed + story in parallel causes the second upload's
+  // blob URL to be overwritten when the first upload completes.
+  const videoRef = useRef(video);
+  videoRef.current = video;
+
+  const update = (partial: Partial<CreativeVideo>) => onChange({ ...videoRef.current, ...partial });
+
   return (
     <div className={multiVariant ? 'flex gap-6 flex-wrap' : ''}>
       <VideoSlot
         label={multiVariant ? 'Feed Video (1:1)' : 'Video'}
         videoUrl={video.url}
         thumbnailUrl={video.thumbnailUrl}
-        onVideoChange={(url, fileName) => onChange({ ...video, url, ...(fileName ? { fileName } : {}) })}
-        onThumbnailChange={url => onChange({ ...video, thumbnailUrl: url })}
-        onRemove={() => onChange({ ...video, url: '', thumbnailUrl: '', fileName: undefined })}
+        onVideoChange={(url, fileName) => update({ url, ...(fileName ? { fileName } : {}) })}
+        onThumbnailChange={url => update({ thumbnailUrl: url })}
+        onRemove={() => update({ url: '', thumbnailUrl: '', fileName: undefined })}
         placeholder="https://res.cloudinary.com/..."
       />
       {multiVariant && (
@@ -801,9 +809,9 @@ function VideoUploadBlock({ video, onChange, multiVariant }: VideoUploadBlockPro
           label="Story / Reels Video (9:16)"
           videoUrl={video.storyUrl || ''}
           thumbnailUrl={video.storyThumbnailUrl || ''}
-          onVideoChange={(url, fileName) => onChange({ ...video, storyUrl: url, ...(fileName ? { storyFileName: fileName } : {}) })}
-          onThumbnailChange={url => onChange({ ...video, storyThumbnailUrl: url })}
-          onRemove={() => onChange({ ...video, storyUrl: '', storyThumbnailUrl: '', storyFileName: undefined })}
+          onVideoChange={(url, fileName) => update({ storyUrl: url, ...(fileName ? { storyFileName: fileName } : {}) })}
+          onThumbnailChange={url => update({ storyThumbnailUrl: url })}
+          onRemove={() => update({ storyUrl: '', storyThumbnailUrl: '', storyFileName: undefined })}
           placeholder="https://res.cloudinary.com/..."
         />
       )}
