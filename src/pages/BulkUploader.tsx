@@ -13,6 +13,7 @@ import {
 import { invokeEdgeFunction } from '@/lib/edgeFunctions';
 import { metaPost, metaGet } from '@/lib/metaApi';
 import { buildCreativeUpdate } from '@/lib/metaCreativeUpdate';
+import { logAdError } from '@/lib/errorLogger';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
@@ -214,6 +215,12 @@ export default function BulkUploader() {
             errors.push(`Ad ${adId} → build failed: ${(err as Error).message}`);
           }
           console.error(`[Bulk Duplicate] Failed to prepare ad ${adId}:`, err);
+          logAdError({
+            source: 'bulk-uploader',
+            adName: `Ad ${adId}`,
+            errorMessage: `Creative build failed: ${(err as Error).message}`,
+            extra: { source_ad_id: adId, account_id: accountId },
+          });
         }
       }
 
@@ -248,8 +255,16 @@ export default function BulkUploader() {
             successCount++;
           } catch (err) {
             errorCount++;
-            errors.push(`Ad ${adId} → Ad Set ${adsetId}: ${(err as Error).message}`);
+            const msg = (err as Error).message;
+            errors.push(`Ad ${adId} → Ad Set ${adsetId}: ${msg}`);
             console.error(`[Bulk Duplicate] Failed:`, adId, '→', adsetId, err);
+            logAdError({
+              source: 'bulk-uploader',
+              adName: adInfo.name,
+              errorMessage: msg,
+              requestBody: adParams,
+              extra: { source_ad_id: adId, target_adset_id: adsetId, account_id: accountId },
+            });
           }
         }
       }

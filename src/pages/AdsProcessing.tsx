@@ -16,6 +16,7 @@ import { invokeEdgeFunction } from '@/lib/edgeFunctions';
 import { bulkEditAds } from '@/lib/openaiClient';
 import { buildCreativeUpdate } from '@/lib/metaCreativeUpdate';
 import { metaPost, metaGet } from '@/lib/metaApi';
+import { logAdError } from '@/lib/errorLogger';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
@@ -425,6 +426,7 @@ export default function AdsProcessing() {
     let firstError: string | null = null;
 
     for (const ad of modifiedAds) {
+      let payload: Record<string, unknown> = {};
       try {
         // Step 1: GET the existing creative. We need name + asset_feed_spec
         // + object_story_spec + degrees_of_freedom_spec + url_tags so the
@@ -444,7 +446,8 @@ export default function AdsProcessing() {
         // creative fields to be edited in place, so we mint a brand-new
         // creative and rebind the ad to it. See src/lib/metaCreativeUpdate.ts
         // for the dispatch table covering all known ad shapes.
-        const { payload, family, format } = buildCreativeUpdate(ad, creative);
+        const { payload: builtPayload, family, format } = buildCreativeUpdate(ad, creative);
+        payload = builtPayload;
         console.log(`[Push to Meta] ${ad.name} (${ad.id}) — ${family}/${format}`, payload);
 
         // Step 3: POST the new creative
@@ -468,6 +471,13 @@ export default function AdsProcessing() {
         // individually to the console for debugging.
         if (firstError === null) firstError = msg;
         console.error(`[Push to Meta] Failed for ${ad.name} (${ad.id}):`, msg, err);
+        logAdError({
+          source: 'ads-processing',
+          adName: ad.name,
+          errorMessage: msg,
+          requestBody: payload,
+          extra: { ad_id: ad.id, account_id: accountId },
+        });
       }
     }
 

@@ -5,6 +5,7 @@
  */
 import { metaPost, metaGet } from './metaApi';
 import { supabase } from '@/integrations/supabase/client';
+import { logAdError } from './errorLogger';
 import type { GeoLocationEntry } from '@/types/templates';
 
 // ── Placement mapping ──
@@ -1107,6 +1108,7 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
         status: 'PENDING',
       };
 
+      let adParams: Record<string, unknown> = {};
       try {
         const headlines = adInput.headlines || [];
         const primaryTexts = adInput.primary_texts || [];
@@ -1190,7 +1192,7 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
         }
 
         // Create ad with inline creative (single POST to ads endpoint)
-        const adParams: Record<string, unknown> = {
+        adParams = {
           name: adInput.name,
           adset_id: metaAdsetId,
           status: 'PAUSED',
@@ -1241,6 +1243,13 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
       } catch (err) {
         adResult.status = 'FAILED';
         adResult.error = (err as Error).message;
+        logAdError({
+          source: 'campaign-builder',
+          adName: adInput.name || 'Unknown Ad',
+          errorMessage: (err as Error).message,
+          requestBody: adParams,
+          extra: { adset_id: metaAdsetId, campaign_id: metaCampaignId },
+        });
       }
 
       adSetResult.ads.push(adResult);
