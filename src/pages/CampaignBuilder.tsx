@@ -699,11 +699,17 @@ export default function CampaignBuilder() {
               video_url: ad.creative.type === 'SINGLE_VIDEO'
                 ? (ad.creative.singleVideo?.url || null)
                 : null,
+              video_file_name: ad.creative.type === 'SINGLE_VIDEO'
+                ? (ad.creative.singleVideo?.fileName || null)
+                : null,
               thumbnail_url: ad.creative.type === 'SINGLE_VIDEO'
                 ? (ad.creative.singleVideo?.thumbnailUrl || null)
                 : null,
               story_video_url: ad.creative.type === 'SINGLE_VIDEO' && ad.creative.multiVariant
                 ? (ad.creative.singleVideo?.storyUrl || null)
+                : null,
+              story_video_file_name: ad.creative.type === 'SINGLE_VIDEO' && ad.creative.multiVariant
+                ? (ad.creative.singleVideo?.storyFileName || null)
                 : null,
               story_thumbnail_url: ad.creative.type === 'SINGLE_VIDEO' && ad.creative.multiVariant
                 ? (ad.creative.singleVideo?.storyThumbnailUrl || null)
@@ -1602,7 +1608,9 @@ export default function CampaignBuilder() {
                     <span className="text-[10px] text-muted-foreground uppercase">Campaign</span>
                   </div>
                   <p className="text-xs font-bold text-foreground truncate">
-                    {campaignName || <span className="text-muted-foreground italic font-normal">Untitled campaign</span>}
+                    {campaignType === 'existing'
+                      ? (existingCampaigns?.find(c => c.id === existingCampaignId)?.name || existingCampaignId || <span className="text-muted-foreground italic font-normal">No campaign selected</span>)
+                      : (campaignName || <span className="text-muted-foreground italic font-normal">Untitled campaign</span>)}
                   </p>
                   {campaignTemplateId && (() => {
                     const tpl = campaignStore.items.find(t => t.id === campaignTemplateId);
@@ -1632,7 +1640,9 @@ export default function CampaignBuilder() {
                     return (
                       <div key={adSet.id} className="bg-background rounded-lg p-2.5 space-y-1.5">
                         <p className="text-[11px] font-bold text-foreground truncate">
-                          {adSet.name || `Ad Set ${si + 1}`}
+                          {adSet.type === 'existing'
+                            ? (existingAdSets?.find(a => a.id === adSet.existingAdsetId)?.name || adSet.existingAdsetId || `Ad Set ${si + 1}`)
+                            : (adSet.name || `Ad Set ${si + 1}`)}
                         </p>
                         {adsetTpl && (
                           <div className="flex flex-wrap gap-1">
@@ -1696,7 +1706,11 @@ export default function CampaignBuilder() {
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Campaign</span>
-                  <span className="font-bold truncate ml-4">{campaignName || 'Untitled'}</span>
+                  <span className="font-bold truncate ml-4">
+                    {campaignType === 'existing'
+                      ? (existingCampaigns?.find(c => c.id === existingCampaignId)?.name || 'Existing Campaign')
+                      : (campaignName || 'Untitled')}
+                  </span>
                 </div>
                 {campaignTemplateId && (() => {
                   const tpl = campaignStore.items.find(t => t.id === campaignTemplateId);
@@ -1721,7 +1735,11 @@ export default function CampaignBuilder() {
               <div className="border-t border-border/30 pt-2 space-y-1.5">
                 {adSets.map((adSet, i) => (
                   <div key={adSet.id} className="flex items-center justify-between text-xs text-muted-foreground">
-                    <span className="truncate">{adSet.name || `Ad Set ${i + 1}`}</span>
+                    <span className="truncate">
+                      {adSet.type === 'existing'
+                        ? (existingAdSets?.find(a => a.id === adSet.existingAdsetId)?.name || `Ad Set ${i + 1}`)
+                        : (adSet.name || `Ad Set ${i + 1}`)}
+                    </span>
                     <span className="shrink-0 ml-2">{adSet.ads.length} ad{adSet.ads.length !== 1 ? 's' : ''}</span>
                   </div>
                 ))}

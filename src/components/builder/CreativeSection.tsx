@@ -34,11 +34,15 @@ export interface CreativeVideo {
   id: string;
   url: string;
   thumbnailUrl: string;
+  /** Original filename from the user's upload (e.g. "Outfit video.mp4").
+   *  Used as the video name in Meta's media library instead of a generic label. */
+  fileName?: string;
   // Optional 9:16 story/reels variant. When set alongside `url`, the launch
   // flow uploads BOTH videos to Meta and routes the story clip to story/reels
   // placements via asset_customization_rules.
   storyUrl?: string;
   storyThumbnailUrl?: string;
+  storyFileName?: string;
 }
 
 export interface CarouselCard {
@@ -626,7 +630,7 @@ interface VideoSlotProps {
   label: string;
   videoUrl: string;
   thumbnailUrl: string;
-  onVideoChange: (url: string) => void;
+  onVideoChange: (url: string, fileName?: string) => void;
   onThumbnailChange: (url: string) => void;
   onRemove: () => void;
   placeholder: string;
@@ -655,13 +659,15 @@ function VideoSlot({ label, videoUrl, thumbnailUrl, onVideoChange, onThumbnailCh
   const handleVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    // Strip extension to get a clean display name (e.g. "Outfit video.mp4" → "Outfit video")
+    const fileName = file.name.replace(/\.[^.]+$/, '');
     const blobUrl = URL.createObjectURL(file);
-    onVideoChange(blobUrl);
+    onVideoChange(blobUrl, fileName);
     if (cloudinaryConfigured) {
       setIsUploading(true);
       try {
         const cloudinaryUrl = await uploadToCloudinary(file, 'video');
-        onVideoChange(cloudinaryUrl);
+        onVideoChange(cloudinaryUrl, fileName);
         toast.success(`${label} uploaded to Cloudinary`);
       } catch (err) {
         console.error('[Cloudinary Video Upload Error]', err);
@@ -785,9 +791,9 @@ function VideoUploadBlock({ video, onChange, multiVariant }: VideoUploadBlockPro
         label={multiVariant ? 'Feed Video (1:1)' : 'Video'}
         videoUrl={video.url}
         thumbnailUrl={video.thumbnailUrl}
-        onVideoChange={url => onChange({ ...video, url })}
+        onVideoChange={(url, fileName) => onChange({ ...video, url, ...(fileName ? { fileName } : {}) })}
         onThumbnailChange={url => onChange({ ...video, thumbnailUrl: url })}
-        onRemove={() => onChange({ ...video, url: '', thumbnailUrl: '' })}
+        onRemove={() => onChange({ ...video, url: '', thumbnailUrl: '', fileName: undefined })}
         placeholder="https://res.cloudinary.com/..."
       />
       {multiVariant && (
@@ -795,9 +801,9 @@ function VideoUploadBlock({ video, onChange, multiVariant }: VideoUploadBlockPro
           label="Story / Reels Video (9:16)"
           videoUrl={video.storyUrl || ''}
           thumbnailUrl={video.storyThumbnailUrl || ''}
-          onVideoChange={url => onChange({ ...video, storyUrl: url })}
+          onVideoChange={(url, fileName) => onChange({ ...video, storyUrl: url, ...(fileName ? { storyFileName: fileName } : {}) })}
           onThumbnailChange={url => onChange({ ...video, storyThumbnailUrl: url })}
-          onRemove={() => onChange({ ...video, storyUrl: '', storyThumbnailUrl: '' })}
+          onRemove={() => onChange({ ...video, storyUrl: '', storyThumbnailUrl: '', storyFileName: undefined })}
           placeholder="https://res.cloudinary.com/..."
         />
       )}

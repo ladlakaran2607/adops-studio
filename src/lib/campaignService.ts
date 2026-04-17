@@ -1137,10 +1137,14 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
           // variant, upload that in parallel and pass both ids to the builder
           // so asset_customization_rules can route feed vs story placements.
           const hasStoryVideo = !!adInput.story_video_url;
+          // Use original filename for Meta media library naming. Fall back to
+          // ad name when filename isn't available (e.g. URL-pasted videos).
+          const feedName = adInput.video_file_name || adInput.name;
+          const storyName = adInput.story_video_file_name || adInput.name;
           const [feedResult, storyResult] = await Promise.all([
-            uploadVideoToMeta(account_id, adInput.video_url, hasStoryVideo ? `${adInput.name} — Feed` : adInput.name),
+            uploadVideoToMeta(account_id, adInput.video_url, feedName),
             hasStoryVideo
-              ? uploadVideoToMeta(account_id, adInput.story_video_url, `${adInput.name} — Story`)
+              ? uploadVideoToMeta(account_id, adInput.story_video_url, storyName)
               : Promise.resolve<VideoUploadResult | null>(null),
           ]);
           const videoId = feedResult.videoId;
