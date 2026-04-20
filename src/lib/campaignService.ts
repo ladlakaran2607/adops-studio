@@ -441,14 +441,12 @@ function buildAssetFeedCarouselCreative(ad: AdInput, ctx: CreativeCtx): Record<s
     cardTitleLabels.push(titleTextToLabel.get(text)!);
   });
 
-  // ── Bodies (from shared primaryTexts, labeled sequentially) ──
-  const bodies = primaryTexts.map((text: string, i: number) => ({
-    text,
-    adlabels: [{ name: `body_${i + 1}` }],
-  }));
-  if (bodies.length === 0) {
-    bodies.push({ text: ' ', adlabels: [{ name: 'body_1' }] });
-  }
+  // ── Bodies — carousel asset_feed_spec only supports ONE body.
+  // Multiple bodies cause Meta to reject with "Multiple bodies assets cannot
+  // be applied to the carousel child attachment" because each carousel renders
+  // one body at the ad level, not per-card. We take the first non-empty entry.
+  const firstBody = primaryTexts.find((t: string) => t?.trim()) || ' ';
+  const bodies = [{ text: firstBody, adlabels: [{ name: 'body_1' }] }];
 
   // ── Link URLs (deduplicated — same logic as titles) ──
   const linkTextToLabel = new Map<string, string>();
@@ -522,14 +520,17 @@ function buildAssetFeedCarouselCreative(ad: AdInput, ctx: CreativeCtx): Record<s
     }];
   }
 
-  // Placement optimization when story variants exist (ad set auto-disables is_dynamic_creative)
+  // Placement optimization rules — always required for carousel asset_feed_spec.
   // Each rule must reference body_label + link_url_label so Meta knows which
   // primary text and CTA link to render for that placement. Without the
-  // body_label binding at the rule level, story/reels carousel renders without
-  // the primary text even though bodies[] is present at the ad level.
+  // body_label binding at the rule level:
+  //   - Multi-body carousels throw "Multiple bodies assets cannot be applied
+  //     to the carousel child attachment" because Meta can't figure out which
+  //     body to use per placement.
+  //   - Story/reels carousels render without primary text.
+  const bodyLabelName = (bodies[0]?.adlabels?.[0]?.name as string) || 'body_1';
+  const firstLinkLabel = cardLinkLabels[0] || 'link_store_1';
   if (hasAnyStory) {
-    const bodyLabelName = (bodies[0]?.adlabels?.[0]?.name as string) || 'body_1';
-    const firstLinkLabel = cardLinkLabels[0] || 'link_store_1';
     assetFeedSpec.asset_customization_rules = [
       {
         carousel_label: { name: 'CAROUSEL_FEED' },
@@ -551,6 +552,21 @@ function buildAssetFeedCarouselCreative(ad: AdInput, ctx: CreativeCtx): Record<s
           publisher_platforms: ['facebook', 'instagram'],
           facebook_positions: ['story', 'facebook_reels'],
           instagram_positions: ['story', 'reels'],
+        },
+      },
+    ];
+    assetFeedSpec.optimization_type = 'PLACEMENT';
+  } else {
+    // No story variants — single rule covering all placements so multi-body
+    // carousels work without needing is_dynamic_creative on the ad set.
+    assetFeedSpec.asset_customization_rules = [
+      {
+        carousel_label: { name: 'CAROUSEL_FEED' },
+        body_label: { name: bodyLabelName },
+        link_url_label: { name: firstLinkLabel },
+        priority: 1,
+        customization_spec: {
+          publisher_platforms: ['facebook', 'instagram'],
         },
       },
     ];
@@ -787,58 +803,6 @@ function buildAssetFeedVideoCreative(
       value: { lead_gen_form_id: ad.lead_form_id, link: 'http://fb.me/' },
     }];
   }
-
-  return spec;
-}
-
-/**
- * 8. ADVANTAGE+ CATALOG AD — product_set_id + object_story_spec.template_data
- *    Used when: ad.product_set_id is set (per-ad opt-in inside a regular campaign).
- *    Meta fills in product image/name/price/url per impression from the catalog.
- *    The user's headlines/primary text become the message + fallback copy; the
- *    uploaded image (if any) is ignored — Meta uses the catalog's product imagery.
- */
-function buildAdvantagePlusCatalogCreative(ad: AdInput, ctx: CreativeCtx): Record<string, unknown> {
-  const isLeadAd = ctx.adSetConvLoc === 'On Ad' && ad.lead_form_id;
-  // Meta rejects `{{product.url}}` in link fields at validation time — those
-  // need a concrete URL. At serve time, Meta overrides with the catalog
-  // product's actual URL anyway, so the static fallback here is just for
-  // validation + lets click-through work if the catalog product has no URL.
-  const fallbackLink = ad.url || 'https://www.facebook.com/';
-  const ctaValue = isLeadAd
-    ? { link: 'http://fb.me/', lead_gen_form_id: ad.lead_form_id }
-    : { link: fallbackLink };
-
-  // Headline + description: use the user-provided copy if set, else fall back
-  // to catalog tokens. Users typically want a static tagline ("Summer Sale")
-  // rather than the raw product name as the headline.
-  const userHeadline = (ad.headlines || []).find((h: string) => h?.trim());
-  const userDescription = (ad.descriptions || []).find((d: string) => d?.trim());
-
-  const templateData: Record<string, unknown> = {
-    name: userHeadline || '{{product.name}}',
-    description: userDescription || '{{product.description}}',
-    link: isLeadAd ? 'http://fb.me/' : fallbackLink,
-    message: (ad.primary_texts || [])[0] || '',
-    call_to_action: { type: ad.call_to_action || 'SHOP_NOW', value: ctaValue },
-  };
-
-  // Map UI creative type to Meta's format_option for catalog templates.
-  // CAROUSEL needs an explicit option; SINGLE_IMAGE/SINGLE_VIDEO use Meta defaults.
-  const creativeType = ad.creative_type || 'SINGLE_IMAGE';
-  if (creativeType === 'CAROUSEL') templateData.format_option = 'carousel_images_multi_items';
-
-  const objectStorySpec: Record<string, unknown> = {
-    page_id: ctx.pageId,
-    template_data: templateData,
-  };
-  if (ctx.instagramId) objectStorySpec.instagram_user_id = ctx.instagramId;
-
-  const spec: Record<string, unknown> = {
-    product_set_id: ad.product_set_id,
-    object_story_spec: objectStorySpec,
-  };
-  if (ad.product_catalog_id) spec.product_catalog_id = ad.product_catalog_id;
 
   return spec;
 }
@@ -1124,15 +1088,7 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
         // ── Dispatch to the right creative builder ──
         let creativeSpec: Record<string, unknown>;
 
-        // Advantage+ catalog ad opt-in (per-ad, inside a regular campaign).
-        // Takes precedence over all other creative shapes — Meta builds the
-        // visible creative from the catalog's products, not the uploaded media.
-        if (adInput.product_set_id) {
-          if (!page_id) {
-            throw new Error(`Ad "${adInput.name}" uses Advantage+ catalog but the ad account has no page configured.`);
-          }
-          creativeSpec = buildAdvantagePlusCatalogCreative(adInput, ctx);
-        } else if (isVideo) {
+        if (isVideo) {
           // Upload the feed video. When the ad carries a 9:16 story video
           // variant, upload that in parallel and pass both ids to the builder
           // so asset_customization_rules can route feed vs story placements.
@@ -1187,6 +1143,28 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
           creativeSpec.degrees_of_freedom_spec = {
             creative_features_spec: adInput.advantage_creative_config,
           };
+        }
+
+        // Product extensions (sidecar "Show Products") — when the user
+        // picks a product set for an ad, keep the original creative intact
+        // and attach the catalog/product set via creative_sourcing_spec.
+        // Meta overlays catalog products alongside the main media in
+        // supported placements. This replaces the old template_data approach
+        // which was replacing the whole creative with a DPA render.
+        if (adInput.product_set_id) {
+          creativeSpec.creative_sourcing_spec = {
+            associated_product_set_id: adInput.product_set_id,
+          };
+          // Force product_extensions ON with MANUAL action metadata so Meta
+          // knows the product set was user-selected (not auto-suggested).
+          const dofSpec = (creativeSpec.degrees_of_freedom_spec || {}) as Record<string, unknown>;
+          const features = (dofSpec.creative_features_spec || {}) as Record<string, unknown>;
+          features.product_extensions = {
+            enroll_status: 'OPT_IN',
+            action_metadata: { type: 'MANUAL' },
+          };
+          dofSpec.creative_features_spec = features;
+          creativeSpec.degrees_of_freedom_spec = dofSpec;
         }
 
         // Music — inject audios into asset_feed_spec when enabled.
