@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils';
 import { CreativeSection, createEmptyCreativeData, type CreativeData } from '@/components/builder/CreativeSection';
 import { DocumentImport, type ParsedDocument } from '@/components/builder/DocumentImport';
 import { AITemplateRecommender } from '@/components/builder/AITemplateRecommender';
-import { launchCampaign, type LaunchResult } from '@/lib/campaignService';
+import { launchCampaign, type LaunchResult, type LaunchProgress } from '@/lib/campaignService';
 import { useAuth } from '@/contexts/AuthContext';
 import { useAdAccounts, getMissingAccountFields } from '@/hooks/useAdAccounts';
 import { useLeadForms } from '@/hooks/useLeadForms';
@@ -135,6 +135,15 @@ const launchQuotes = [
   "Making marketing magic happen...",
 ];
 
+interface CollectionConfig {
+  catalogId: string;
+  productSetId: string;
+  buttonLabel: string;
+  // Fixed-button destination for the Instant Experience. Blank → falls back
+  // to the ad template's conversionDomain at launch time.
+  buttonUrl: string;
+}
+
 interface AdEntry {
   id: string;
   name: string;
@@ -155,6 +164,10 @@ interface AdEntry {
   headlines: string[];
   primaryTexts: string[];
   creative: CreativeData;
+  // Storefront Instant Experience config — only used when creative.type
+  // is COLLECTION. Launch flow auto-creates a fresh IE per ad with these
+  // inputs; for non-collection ads the block is ignored.
+  collection: CollectionConfig;
   adTemplateId: string;
   advantageCreativeId: string;
   leadFormId: string;
@@ -201,6 +214,12 @@ function createAd(index: number): AdEntry {
     headlines: [''],
     primaryTexts: [''],
     creative: createEmptyCreativeData(),
+    collection: {
+      catalogId: '',
+      productSetId: '',
+      buttonLabel: 'Shop now',
+      buttonUrl: '',
+    },
     adTemplateId: '',
     advantageCreativeId: '',
     leadFormId: '',
@@ -306,6 +325,93 @@ function ProductSetField({
   );
 }
 
+/**
+ * Storefront-panel inputs for a Collection ad: catalog, product set, and
+ * the Instant Experience fixed-button (label + destination URL). The
+ * catalog/product-set comboboxes always fetch from Meta — the sidecar
+ * "paste an ID" escape hatch from ProductSetField is omitted here because
+ * a Collection ad cannot fall back to a free-form product set reference
+ * (we use both IDs to build the IE).
+ */
+function CollectionStorefrontFields({
+  accountId,
+  value,
+  onChange,
+  placeholderUrl,
+}: {
+  accountId: string;
+  value: CollectionConfig;
+  onChange: (next: CollectionConfig) => void;
+  placeholderUrl?: string;
+}) {
+  const { data: catalogs, isLoading: loadingCatalogs, error: catalogsError } =
+    useCatalogs(accountId, !!accountId);
+  const { data: productSets, isLoading: loadingProductSets, error: productSetsError } =
+    useProductSets(accountId, value.catalogId || null, !!accountId && !!value.catalogId);
+
+  return (
+    <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <div className="w-5 h-5 rounded bg-primary/15 flex items-center justify-center text-primary text-[10px] font-bold">IE</div>
+        <Label className="text-xs font-bold text-foreground">Storefront Instant Experience</Label>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label className="text-[11px] text-muted-foreground">Catalog</Label>
+          <Combobox
+            options={(catalogs || []).map(c => ({ value: c.id, label: c.name }))}
+            value={value.catalogId}
+            onChange={v => onChange({ ...value, catalogId: v, productSetId: '' })}
+            placeholder="Select a catalog..."
+            searchPlaceholder="Search catalogs..."
+            emptyText={catalogsError ? `Error: ${(catalogsError as Error).message}` : 'No catalogs found'}
+            loading={loadingCatalogs}
+            disabled={!accountId}
+            className="mt-1"
+          />
+        </div>
+        <div>
+          <Label className="text-[11px] text-muted-foreground">Product Set</Label>
+          <Combobox
+            options={(productSets || []).map(p => ({ value: p.id, label: p.name }))}
+            value={value.productSetId}
+            onChange={v => onChange({ ...value, productSetId: v })}
+            placeholder={value.catalogId ? 'Select product set...' : 'Pick a catalog first'}
+            searchPlaceholder="Search..."
+            emptyText={productSetsError ? `Error: ${(productSetsError as Error).message}` : 'No product sets found'}
+            loading={loadingProductSets}
+            disabled={!value.catalogId}
+            className="mt-1"
+          />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label className="text-[11px] text-muted-foreground">Button Label</Label>
+          <Input
+            value={value.buttonLabel}
+            onChange={e => onChange({ ...value, buttonLabel: e.target.value })}
+            placeholder="Shop now"
+            className="mt-1"
+          />
+        </div>
+        <div>
+          <Label className="text-[11px] text-muted-foreground">Button Destination URL</Label>
+          <Input
+            value={value.buttonUrl}
+            onChange={e => onChange({ ...value, buttonUrl: e.target.value })}
+            placeholder={placeholderUrl ? `Overrides template URL — ${placeholderUrl}` : 'https://example.com'}
+            className="mt-1"
+          />
+          <p className="text-[10px] text-muted-foreground mt-1">
+            Leave blank to use the ad template's URL.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function CampaignBuilder() {
   const [accountId, setAccountId] = useState('');
   const [campaignType, setCampaignType] = useState<'new' | 'existing'>('new');
@@ -323,6 +429,7 @@ export default function CampaignBuilder() {
   const [campaignTemplateId, setCampaignTemplateId] = useState('');
   const [adSets, setAdSets] = useState<AdSetEntry[]>([createAdSet(1)]);
   const [isLaunching, setIsLaunching] = useState(false);
+  const [launchProgress, setLaunchProgress] = useState<LaunchProgress | null>(null);
   const [docImportOpen, setDocImportOpen] = useState(false);
   const [launchQuote, setLaunchQuote] = useState('');
   const quoteIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -568,6 +675,27 @@ export default function CampaignBuilder() {
             return;
           }
         }
+        if (ad.creative.type === 'COLLECTION') {
+          const coverKind = ad.creative.collectionCoverKind ?? 'IMAGE';
+          if (coverKind === 'IMAGE') {
+            const coverUrl = ad.creative.singleImage?.squareUrl || '';
+            if (!coverUrl) { toast.error(`Ad "${ad.name}" — Collection cover image is required`); return; }
+            if (coverUrl.startsWith('blob:')) {
+              toast.error(`Ad "${ad.name}" Collection cover is a local image. Enable Cloudinary or paste an HTTPS URL before launching.`);
+              return;
+            }
+          } else {
+            const coverUrl = ad.creative.singleVideo?.url || '';
+            if (!coverUrl) { toast.error(`Ad "${ad.name}" — Collection cover video is required`); return; }
+            if (coverUrl.startsWith('blob:')) {
+              toast.error(`Ad "${ad.name}" Collection cover is a local video. Enable Cloudinary or paste an HTTPS URL before launching.`);
+              return;
+            }
+          }
+          if (!ad.collection.catalogId) { toast.error(`Ad "${ad.name}" — pick a catalog for the Storefront`); return; }
+          if (!ad.collection.productSetId) { toast.error(`Ad "${ad.name}" — pick a product set for the Storefront`); return; }
+          if (!ad.collection.buttonLabel.trim()) { toast.error(`Ad "${ad.name}" — Storefront button label is required`); return; }
+        }
 
         // Multi-variant requires a 9:16 story variant for every image
         if (ad.creative.multiVariant) {
@@ -622,6 +750,7 @@ export default function CampaignBuilder() {
     }
 
     setIsLaunching(true);
+    setLaunchProgress(null);
     try {
       const payload: Record<string, unknown> = {
         account_id: accountId,
@@ -690,19 +819,23 @@ export default function CampaignBuilder() {
               lead_form_id: ad.leadFormId || null,
               product_set_id: ad.productSetId.trim() || null,
               product_catalog_id: ad.productCatalogId || null,
-              square_image_url: ad.creative.type === 'SINGLE_IMAGE'
+              square_image_url: (ad.creative.type === 'SINGLE_IMAGE' ||
+                                 (ad.creative.type === 'COLLECTION' && ad.creative.collectionCoverKind !== 'VIDEO'))
                 ? (ad.creative.singleImage?.squareUrl || null)
                 : null,
               story_image_url: ad.creative.type === 'SINGLE_IMAGE'
                 ? (ad.creative.singleImage?.storyVariants.find(v => v.id === ad.creative.singleImage?.selectedStoryId)?.url || null)
                 : null,
-              video_url: ad.creative.type === 'SINGLE_VIDEO'
+              video_url: (ad.creative.type === 'SINGLE_VIDEO' ||
+                          (ad.creative.type === 'COLLECTION' && ad.creative.collectionCoverKind === 'VIDEO'))
                 ? (ad.creative.singleVideo?.url || null)
                 : null,
-              video_file_name: ad.creative.type === 'SINGLE_VIDEO'
+              video_file_name: (ad.creative.type === 'SINGLE_VIDEO' ||
+                                (ad.creative.type === 'COLLECTION' && ad.creative.collectionCoverKind === 'VIDEO'))
                 ? (ad.creative.singleVideo?.fileName || null)
                 : null,
-              thumbnail_url: ad.creative.type === 'SINGLE_VIDEO'
+              thumbnail_url: (ad.creative.type === 'SINGLE_VIDEO' ||
+                              (ad.creative.type === 'COLLECTION' && ad.creative.collectionCoverKind === 'VIDEO'))
                 ? (ad.creative.singleVideo?.thumbnailUrl || null)
                 : null,
               story_video_url: ad.creative.type === 'SINGLE_VIDEO' && ad.creative.multiVariant
@@ -728,6 +861,14 @@ export default function CampaignBuilder() {
                     )?.url || null,
                   }))
                 : [],
+              // Collection / Storefront IE fields — only relevant when creative_type is COLLECTION.
+              collection_cover_kind: ad.creative.type === 'COLLECTION'
+                ? (ad.creative.collectionCoverKind ?? 'IMAGE')
+                : null,
+              collection_catalog_id: ad.creative.type === 'COLLECTION' ? ad.collection.catalogId : null,
+              collection_product_set_id: ad.creative.type === 'COLLECTION' ? ad.collection.productSetId : null,
+              collection_button_label: ad.creative.type === 'COLLECTION' ? ad.collection.buttonLabel.trim() : null,
+              collection_button_url: ad.creative.type === 'COLLECTION' ? ad.collection.buttonUrl.trim() : null,
               advantage_creative_config: advantageTemplate ? (() => {
                 const s = (on: boolean) => ({ enroll_status: on ? 'OPT_IN' : 'OPT_OUT' });
                 const creativeType = ad.creative.type;
@@ -805,7 +946,7 @@ export default function CampaignBuilder() {
         };
       });
 
-      const result: LaunchResult = await launchCampaign(payload);
+      const result: LaunchResult = await launchCampaign(payload, setLaunchProgress);
 
       // Count results — ad sets AND ads
       let createdAdSets = 0;
@@ -851,6 +992,7 @@ export default function CampaignBuilder() {
       toast.error(`Campaign launch failed: ${(err as Error).message}`);
     } finally {
       setIsLaunching(false);
+      setLaunchProgress(null);
     }
   };
 
@@ -987,8 +1129,19 @@ export default function CampaignBuilder() {
         done:
           (ad.creative.type === 'SINGLE_IMAGE' && !!ad.creative.singleImage?.squareUrl) ||
           (ad.creative.type === 'SINGLE_VIDEO' && !!ad.creative.singleVideo?.url) ||
-          (ad.creative.type === 'CAROUSEL' && ad.creative.carouselCards.some(c => !!c.image.squareUrl)),
+          (ad.creative.type === 'CAROUSEL' && ad.creative.carouselCards.some(c => !!c.image.squareUrl)) ||
+          (ad.creative.type === 'COLLECTION' && (
+            (ad.creative.collectionCoverKind ?? 'IMAGE') === 'VIDEO'
+              ? !!ad.creative.singleVideo?.url
+              : !!ad.creative.singleImage?.squareUrl
+          )),
       });
+      if (ad.creative.type === 'COLLECTION') {
+        readinessItems.push({
+          label: `${adLabel} — storefront`,
+          done: !!ad.collection.catalogId && !!ad.collection.productSetId && !!ad.collection.buttonLabel.trim(),
+        });
+      }
     });
   });
   const completedCount = readinessItems.filter(i => i.done).length;
@@ -1483,6 +1636,16 @@ export default function CampaignBuilder() {
                                 onChange={(creative) => updateAd(adSet.id, ad.id, { creative })}
                               />
 
+                              {/* Collection — Storefront Instant Experience fields */}
+                              {ad.creative.type === 'COLLECTION' && (
+                                <CollectionStorefrontFields
+                                  accountId={accountId}
+                                  value={ad.collection}
+                                  onChange={(collection) => updateAd(adSet.id, ad.id, { collection })}
+                                  placeholderUrl={adStore.items.find(t => t.id === ad.adTemplateId)?.conversionDomain}
+                                />
+                              )}
+
                               {/* Per-ad URL override — image/video only (carousel uses per-card URLs) */}
                               {(ad.creative.type === 'SINGLE_IMAGE' || ad.creative.type === 'SINGLE_VIDEO') && (() => {
                                 const templateUrl = adStore.items.find(t => t.id === ad.adTemplateId)?.conversionDomain;
@@ -1698,6 +1861,27 @@ export default function CampaignBuilder() {
             <p className="text-lg font-medium text-foreground animate-fade-in" key={launchQuote}>
               {launchQuote}
             </p>
+
+            {/* Live progress — status line + bar. Falls back to the
+                quote-only view on the first render before any step fires. */}
+            {launchProgress && launchProgress.total > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-foreground font-medium truncate pr-2" title={launchProgress.message}>
+                    {launchProgress.message}
+                  </span>
+                  <span className="shrink-0 text-muted-foreground tabular-nums">
+                    {launchProgress.completed}/{launchProgress.total}
+                  </span>
+                </div>
+                <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                  <div
+                    className="h-full bg-primary transition-all duration-300 ease-out"
+                    style={{ width: `${Math.min(100, Math.round((launchProgress.completed / launchProgress.total) * 100))}%` }}
+                  />
+                </div>
+              </div>
+            )}
 
             {/* Campaign Summary */}
             <div className="bg-background rounded-xl p-5 text-left space-y-3">

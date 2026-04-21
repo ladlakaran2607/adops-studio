@@ -586,6 +586,179 @@ function buildAssetFeedCarouselCreative(ad: AdInput, ctx: CreativeCtx): Record<s
 }
 
 // ══════════════════════════════════════════════════════════════════
+// COLLECTION / STOREFRONT INSTANT EXPERIENCE
+// ══════════════════════════════════════════════════════════════════
+// Derived from two known-good Collection ads on a live client account.
+// The canonical link_data shape (minus per-ad copy) is:
+//
+//   object_story_spec.link_data = {
+//     link: "https://fb.com/canvas_doc/{canvas_id}",  // IE landing
+//     message, name, description,                      // ad copy
+//     image_hash: "<cover ad-image hash>",             // cover lives HERE,
+//                                                      // not in the canvas
+//     call_to_action: { type: "SHOP_NOW" },            // no value.link
+//     retailer_item_ids: ["0","0","0","0"],            // 4 placeholders —
+//                                                      // flags the ad as
+//                                                      // Collection and
+//                                                      // reserves the four
+//                                                      // product tiles
+//   }
+//
+// Flow:
+//   1. Upload cover via `act_{id}/adimages` (account scope → user token,
+//      no page permissions required) → returns an image hash.
+//   2. Create a canvas with product_set + CTA button (cover is NOT a
+//      canvas element — it's on link_data). Canvas creation uses page
+//      token via meta-proxy's pageId swap.
+//   3. Return a link_data creative wired to the canvas URL, with the
+//      image_hash and retailer_item_ids that mark it as Collection.
+
+// Standard Collection grid shows 4 product tiles; "0" tells Meta to
+// auto-fill from the product set the canvas is bound to.
+const COLLECTION_RETAILER_ITEM_PLACEHOLDERS = ['0', '0', '0', '0'];
+
+async function uploadAdImage(accountId: string, imageUrl: string): Promise<string> {
+  // POST /act_{id}/adimages — Meta rejects the `url` param for non-Meta apps
+  // (#3 app capability). Multipart file upload is the only third-party path.
+  // meta-proxy fetches the Cloudinary URL server-side and forwards the bytes.
+  // Response shape: { images: { <filename>: { hash, url, width, height } } }.
+  // Uses the user/system-user token (ads_management scope) — no page perms.
+  const res = await metaPost(
+    accountId,
+    `act_${accountId}/adimages`,
+    {},
+    { multipart: { fileUrl: imageUrl } },
+  );
+  if (res.error) throw new Error(`Ad image upload failed: ${res.error.error_user_msg || res.error.message}`);
+  const images = (res.images || {}) as Record<string, { hash?: string }>;
+  const firstHash = Object.values(images)[0]?.hash;
+  if (!firstHash) throw new Error('No image hash returned from Meta adimages');
+  return firstHash;
+}
+
+async function createCanvasElement(
+  accountId: string,
+  pageId: string,
+  body: Record<string, unknown>,
+): Promise<string> {
+  const res = await metaPost(accountId, `${pageId}/canvas_elements`, body, { pageId });
+  if (res.error) throw new Error(`Canvas element creation failed: ${res.error.error_user_msg || res.error.message}`);
+  if (!res.id) throw new Error('No canvas element ID returned from Meta');
+  return res.id;
+}
+
+async function buildCollectionStorefront(
+  ad: AdInput,
+  ctx: CreativeCtx,
+  accountId: string,
+): Promise<Record<string, unknown>> {
+  if (!ctx.pageId) throw new Error('Collection ads require a Facebook Page on the ad account');
+  if (!ad.collection_product_set_id) throw new Error('Collection ad missing product_set_id');
+  if (!ad.collection_button_label?.trim()) throw new Error('Collection ad missing button label');
+
+  const buttonUrl = (ad.collection_button_url || ad.url || '').trim();
+  if (!buttonUrl) throw new Error('Collection ad missing destination URL for the fixed button');
+
+  const coverKind = ad.collection_cover_kind === 'VIDEO' ? 'VIDEO' : 'IMAGE';
+  const headline = (ad.headlines || [])[0] || '';
+  const primaryText = (ad.primary_texts || [])[0] || '';
+  const ctaType = ad.call_to_action || 'SHOP_NOW';
+
+  // ── Step 1: resolve cover media ──
+  // Both cover kinds end up uploading an image to /adimages (either the
+  // cover itself for IMAGE, or the video poster for VIDEO) and stuffing
+  // the returned hash into the creative.
+  let coverImageHash: string;
+  let coverVideoId: string | null = null;
+  if (coverKind === 'VIDEO') {
+    if (!ad.video_url) throw new Error('Collection video cover requires a video URL');
+    const { videoId, thumbnailUrl: metaThumb } = await uploadVideoToMeta(
+      accountId,
+      ad.video_url,
+      ad.video_file_name || ad.name,
+    );
+    coverVideoId = videoId;
+    // Prefer a user-provided thumbnail (HTTPS URL); fall back to the
+    // auto-generated frame Meta returned from /advideos. The poster is
+    // required — Collection video ads reject missing image_hash.
+    const posterUrl = (ad.thumbnail_url && String(ad.thumbnail_url).startsWith('https://'))
+      ? ad.thumbnail_url
+      : metaThumb;
+    if (!posterUrl) {
+      throw new Error('Collection video cover needs a poster — Meta did not return a thumbnail and none was provided');
+    }
+    coverImageHash = await uploadAdImage(accountId, posterUrl);
+  } else {
+    if (!ad.square_image_url) throw new Error('Collection image cover requires a square image URL');
+    coverImageHash = await uploadAdImage(accountId, ad.square_image_url);
+  }
+
+  // ── Step 2: canvas elements — product grid + CTA button ──
+  const productSetElementId = await createCanvasElement(accountId, ctx.pageId, {
+    canvas_product_set: { product_set_id: ad.collection_product_set_id },
+  });
+  const buttonElementId = await createCanvasElement(accountId, ctx.pageId, {
+    canvas_button: {
+      rich_text: { plain_text: ad.collection_button_label.trim() },
+      open_url_action: { url: buttonUrl },
+    },
+  });
+
+  // ── Step 3: canvas ──
+  const canvasRes = await metaPost(accountId, `${ctx.pageId}/canvases`, {
+    name: `${ad.name} — Storefront`,
+    body_element_ids: [productSetElementId, buttonElementId],
+    is_published: true,
+  }, { pageId: ctx.pageId });
+  if (canvasRes.error) throw new Error(`Canvas creation failed: ${canvasRes.error.error_user_msg || canvasRes.error.message}`);
+  const canvasId = canvasRes.id;
+  if (!canvasId) throw new Error('No canvas ID returned from Meta');
+
+  console.log(`[Collection] ${ad.name} → kind: ${coverKind}, canvas_id: ${canvasId}, image_hash: ${coverImageHash}${coverVideoId ? `, video_id: ${coverVideoId}` : ''}, product_set: ${productSetElementId}, button: ${buttonElementId}`);
+
+  // ── Step 4: ad creative ──
+  // Image cover → link_data with `link` at top level.
+  // Video cover → video_data; the canvas link moves INSIDE call_to_action.value.link.
+  const canvasUrl = `https://fb.com/canvas_doc/${canvasId}`;
+
+  if (coverKind === 'VIDEO') {
+    const videoData: Record<string, unknown> = {
+      video_id: coverVideoId,
+      message: primaryText,
+      image_hash: coverImageHash,
+      retailer_item_ids: COLLECTION_RETAILER_ITEM_PLACEHOLDERS,
+      call_to_action: { type: ctaType, value: { link: canvasUrl } },
+    };
+    if (headline) videoData.title = headline;
+
+    return {
+      object_story_spec: {
+        page_id: ctx.pageId,
+        ...(ctx.instagramId ? { instagram_user_id: ctx.instagramId } : {}),
+        video_data: videoData,
+      },
+    };
+  }
+
+  const linkData: Record<string, unknown> = {
+    link: canvasUrl,
+    message: primaryText,
+    image_hash: coverImageHash,
+    call_to_action: { type: ctaType },
+    retailer_item_ids: COLLECTION_RETAILER_ITEM_PLACEHOLDERS,
+  };
+  if (headline) linkData.name = headline;
+
+  return {
+    object_story_spec: {
+      page_id: ctx.pageId,
+      ...(ctx.instagramId ? { instagram_user_id: ctx.instagramId } : {}),
+      link_data: linkData,
+    },
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════
 // 5. UPLOAD VIDEO TO META — returns video_id
 // ══════════════════════════════════════════════════════════════════
 interface VideoUploadResult {
@@ -829,8 +1002,22 @@ export interface LaunchResult {
   }>;
 }
 
+export interface LaunchProgress {
+  /** Human-readable status for the current operation. */
+  message: string;
+  /** Number of macro steps completed so far (campaign + ad sets + ads). */
+  completed: number;
+  /** Total macro steps for this launch. */
+  total: number;
+}
+
+export type LaunchProgressCallback = (progress: LaunchProgress) => void;
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function launchCampaign(payload: Record<string, any>): Promise<LaunchResult> {
+export async function launchCampaign(
+  payload: Record<string, any>,
+  onProgress?: LaunchProgressCallback,
+): Promise<LaunchResult> {
   const {
     account_id,
     organization_id,
@@ -863,6 +1050,19 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
 
   const results: LaunchResult = { ad_sets: [] };
 
+  // Progress tracking: one step per macro op (campaign + each ad set + each ad).
+  // When campaign is "existing" we skip the campaign step but still report
+  // progress so the UI stays consistent.
+  const totalAds = (ad_sets || []).reduce(
+    (sum: number, s: { ads?: unknown[] }) => sum + (s.ads?.length || 0),
+    0,
+  );
+  const totalSteps = (campaign_type === 'existing' ? 0 : 1) + (ad_sets?.length || 0) + totalAds;
+  let completedSteps = 0;
+  const report = (message: string) => {
+    onProgress?.({ message, completed: completedSteps, total: totalSteps });
+  };
+
   // ── Step 1: Create or use existing campaign ──
   let metaCampaignId: string;
 
@@ -870,6 +1070,7 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
     metaCampaignId = existing_campaign_id;
     results.meta_campaign_id = metaCampaignId;
   } else {
+    report(`Creating campaign "${campaign.name}"…`);
     const specialCats = campaign.special_ad_categories || [];
     const metaSpecialCats = specialCats.length === 0 || (specialCats.length === 1 && specialCats[0] === 'NONE')
       ? ['NONE']
@@ -930,6 +1131,7 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
       }).select('id').single();
       if (dbCampaign) results.campaign_id = dbCampaign.id;
     }
+    completedSteps += 1;
   }
 
   // ── Step 2: Create ad sets + ads ──
@@ -943,6 +1145,7 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
     let metaAdsetId: string;
     const tf = adSetInput.template_fields || {};
     const convLoc = tf.adsetConversionLocation || tf.adset_conversion_location || '';
+    report(`Creating ad set "${adSetInput.name}"…`);
 
     if (adSetInput.type === 'existing' && adSetInput.existing_adset_id) {
       metaAdsetId = adSetInput.existing_adset_id;
@@ -1061,12 +1264,20 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
         adSetResult.status = 'FAILED';
         adSetResult.error = (err as Error).message;
         results.ad_sets.push(adSetResult);
+        // Still consume the step budget for this ad set + its ads so the
+        // progress bar doesn't stall at a never-reached total.
+        completedSteps += 1 + (adSetInput.ads?.length || 0);
+        report(`Ad set "${adSetInput.name}" failed — continuing`);
         continue;
       }
     }
+    completedSteps += 1;
 
     // ── Step 3: Create ads ──
-    for (const adInput of adSetInput.ads || []) {
+    const adInputs: AdInput[] = adSetInput.ads || [];
+    for (let adIdx = 0; adIdx < adInputs.length; adIdx++) {
+      const adInput = adInputs[adIdx];
+      const adLabel = `${adInput.name} (${adIdx + 1}/${adInputs.length})`;
       const adResult: LaunchResult['ad_sets'][0]['ads'][0] = {
         name: adInput.name,
         status: 'PENDING',
@@ -1077,6 +1288,7 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
         const headlines = adInput.headlines || [];
         const primaryTexts = adInput.primary_texts || [];
         const creativeType = adInput.creative_type || 'SINGLE_IMAGE';
+        const isCollection = creativeType === 'COLLECTION';
         const isVideo = creativeType === 'SINGLE_VIDEO' && !!adInput.video_url;
         const hasStory = !!adInput.story_image_url;
         const isCarousel = creativeType === 'CAROUSEL' && adInput.carousel_cards?.length > 0;
@@ -1088,7 +1300,11 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
         // ── Dispatch to the right creative builder ──
         let creativeSpec: Record<string, unknown>;
 
-        if (isVideo) {
+        if (isCollection) {
+          report(`Building Storefront for ${adLabel}…`);
+          creativeSpec = await buildCollectionStorefront(adInput, ctx, account_id);
+        } else if (isVideo) {
+          report(`Uploading video for ${adLabel}…`);
           // Upload the feed video. When the ad carries a 9:16 story video
           // variant, upload that in parallel and pass both ids to the builder
           // so asset_customization_rules can route feed vs story placements.
@@ -1151,7 +1367,9 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
         // Meta overlays catalog products alongside the main media in
         // supported placements. This replaces the old template_data approach
         // which was replacing the whole creative with a DPA render.
-        if (adInput.product_set_id) {
+        // Skipped for COLLECTION ads — they already reference a product
+        // set via the Instant Experience canvas and Meta rejects the combo.
+        if (adInput.product_set_id && !isCollection) {
           creativeSpec.creative_sourcing_spec = {
             associated_product_set_id: adInput.product_set_id,
           };
@@ -1197,6 +1415,7 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
           ];
         }
 
+        report(`Creating ${adLabel}…`);
         const adRes = await metaPost(account_id, `act_${account_id}/ads`, adParams);
 
         adResult.meta_ad_id = adRes.id;
@@ -1234,11 +1453,14 @@ export async function launchCampaign(payload: Record<string, any>): Promise<Laun
         });
       }
 
+      completedSteps += 1;
       adSetResult.ads.push(adResult);
     }
 
     results.ad_sets.push(adSetResult);
   }
+
+  report('Wrapping up…');
 
   return results;
 }

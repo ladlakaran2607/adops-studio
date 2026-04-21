@@ -28,6 +28,9 @@ CLAUDE.md
 # Deployment notes (local reference only)
 DEPLOYMENT.md
 
+# Work log (local reference only — used for invoicing)
+work-done.md
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

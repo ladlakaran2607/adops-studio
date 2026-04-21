@@ -5,7 +5,7 @@ import { Label } from '@/components/ui/label';
 import { Card } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Upload, Trash2, Plus, Image, Wand2, Crop, Link, Images, Loader2, Video, CopyPlus, Pencil, Eye } from 'lucide-react';
+import { Upload, Trash2, Plus, Image, Wand2, Crop, Link, Images, Loader2, Video, CopyPlus, Pencil, Eye, LayoutGrid } from 'lucide-react';
 import { CREATIVE_URL_INPUT_ENABLED } from '@/lib/featureFlags';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
@@ -53,11 +53,15 @@ export interface CarouselCard {
 }
 
 export interface CreativeData {
-  type: 'SINGLE_IMAGE' | 'SINGLE_VIDEO' | 'CAROUSEL';
+  type: 'SINGLE_IMAGE' | 'SINGLE_VIDEO' | 'CAROUSEL' | 'COLLECTION';
   multiVariant: boolean;
   singleImage: CreativeImage | null;
   singleVideo: CreativeVideo | null;
   carouselCards: CarouselCard[];
+  // Cover media kind for COLLECTION ads. The cover reuses singleImage /
+  // singleVideo so the upload plumbing is shared; this flag just tells the
+  // renderer and launch flow which slot to read from.
+  collectionCoverKind?: 'IMAGE' | 'VIDEO';
 }
 
 function createEmptyImage(): CreativeImage {
@@ -91,6 +95,7 @@ export function createEmptyCreativeData(): CreativeData {
     singleImage: null,
     singleVideo: null,
     carouselCards: [createCarouselCard(1), createCarouselCard(2)],
+    collectionCoverKind: 'IMAGE',
   };
 }
 
@@ -849,8 +854,12 @@ export function CreativeSection({ data, onChange }: CreativeSectionProps) {
     }
   };
 
-  const updateType = (type: 'SINGLE_IMAGE' | 'SINGLE_VIDEO' | 'CAROUSEL') => {
+  const updateType = (type: CreativeData['type']) => {
     onChange({ ...data, type });
+  };
+
+  const updateCollectionCoverKind = (coverKind: 'IMAGE' | 'VIDEO') => {
+    onChange({ ...data, collectionCoverKind: coverKind });
   };
 
   const updateSingleImage = (image: CreativeImage) => {
@@ -980,7 +989,10 @@ export function CreativeSection({ data, onChange }: CreativeSectionProps) {
     { value: 'SINGLE_IMAGE', label: 'Image', icon: <Image className="w-3.5 h-3.5" /> },
     { value: 'SINGLE_VIDEO', label: 'Video', icon: <Video className="w-3.5 h-3.5" /> },
     { value: 'CAROUSEL', label: 'Carousel', icon: <Images className="w-3.5 h-3.5" /> },
+    { value: 'COLLECTION', label: 'Collection', icon: <LayoutGrid className="w-3.5 h-3.5" /> },
   ];
+
+  const collectionCoverKind = data.collectionCoverKind ?? 'IMAGE';
 
   return (
     <div className="space-y-4">
@@ -1132,6 +1144,44 @@ export function CreativeSection({ data, onChange }: CreativeSectionProps) {
             </Button>
             <input ref={bulkRef} type="file" accept="image/*" multiple className="hidden" onChange={handleBulkUpload} />
           </div>
+        </div>
+      )}
+
+      {/* Collection — cover media only; catalog/product-set/button live on the ad card */}
+      {data.type === 'COLLECTION' && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Label className="text-xs text-muted-foreground">Cover</Label>
+            <div className="flex bg-muted rounded-lg p-0.5">
+              {(['IMAGE', 'VIDEO'] as const).map(kind => (
+                <button
+                  key={kind}
+                  onClick={() => updateCollectionCoverKind(kind)}
+                  className={cn(
+                    'px-3 py-1 rounded-md text-[11px] font-medium transition-all',
+                    collectionCoverKind === kind
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  {kind === 'IMAGE' ? 'Image' : 'Video'}
+                </button>
+              ))}
+            </div>
+          </div>
+          {collectionCoverKind === 'IMAGE' ? (
+            <ImageUploadBlock
+              image={data.singleImage || createEmptyImage()}
+              onChange={updateSingleImage}
+              multiVariant={multiVariant}
+            />
+          ) : (
+            <VideoUploadBlock
+              video={data.singleVideo || createEmptyVideo()}
+              onChange={updateSingleVideo}
+              multiVariant={multiVariant}
+            />
+          )}
         </div>
       )}
     </div>
