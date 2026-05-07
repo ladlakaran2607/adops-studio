@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ArrowLeft, Save } from 'lucide-react';
 import type { AdsetTemplate, PlacementOptions } from '@/types/templates';
 import { LocationPicker } from './LocationPicker';
+import { DetailedTargetingPicker } from './DetailedTargetingPicker';
 
 const optimizations = ['Conversions', 'Lead Generation', 'Landing Page Views', 'Link Clicks', 'Impressions', 'Reach', 'Value'];
 const conversionLocations = ['Website', 'App', 'Messaging', 'Calls', 'Website and App', 'On Ad'];
@@ -22,7 +23,6 @@ const bidStrategies = [
 ];
 const budgetTypes = ['Daily', 'Lifetime'];
 const genders = ['All', 'Male', 'Female'];
-const locationTypes = ['Flexible', 'Living in', 'Recently in', 'Traveling in'];
 const attributionSettings = [
   { value: '7d_click_1d_view', label: '7-day click, 1-day view' },
   { value: '1d_click', label: '1-day click' },
@@ -204,7 +204,7 @@ export function AdsetTemplateForm({ template, onSave, onCancel, accountId }: Pro
       <Card>
         <CardHeader><CardTitle className="text-base">Targeting</CardTitle></CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 gap-4">
             <div>
               <Label>Gender</Label>
               <Select value={form.targetGender} onValueChange={v => set('targetGender', v)}>
@@ -240,29 +240,26 @@ export function AdsetTemplateForm({ template, onSave, onCancel, accountId }: Pro
                 </Select>
               </div>
             </div>
-            <div>
-              <Label>Location Type</Label>
-              <Select value={form.locationType} onValueChange={v => set('locationType', v)}>
-                <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
-                <SelectContent>{locationTypes.map(l => <SelectItem key={l} value={l}>{l}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
           </div>
           <LocationPicker
             value={form.location}
             onChange={(val) => set('location', val)}
             accountId={accountId}
           />
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <Label>Custom Audiences</Label>
-              <Input value={form.customAudiences} onChange={e => set('customAudiences', e.target.value)} placeholder="Audience IDs (comma-separated)" className="mt-1.5" />
-            </div>
-            <div>
-              <Label>Excluded Audiences</Label>
-              <Input value={form.excludedAudiences} onChange={e => set('excludedAudiences', e.target.value)} placeholder="Excluded audience IDs" className="mt-1.5" />
-            </div>
-          </div>
+          <LocationPicker
+            value={form.excludedLocation}
+            onChange={(val) => set('excludedLocation', val)}
+            accountId={accountId}
+            label="Excluded Locations"
+            addButtonLabel="Add Excluded Location"
+          />
+          <DetailedTargetingPicker
+            value={form.detailedTargeting}
+            onChange={(val) => set('detailedTargeting', val)}
+            accountId={accountId}
+            label="Detailed Targeting"
+            addButtonLabel="Add Targeting"
+          />
         </CardContent>
       </Card>
 

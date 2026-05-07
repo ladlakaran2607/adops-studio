@@ -60,10 +60,12 @@ export function createEmptyAdsetTemplate(): Omit<AdsetTemplate, 'id' | 'createdA
     dynamicCreative: false, bidStrategy: 'LOWEST_COST_WITHOUT_CAP', bidAmount: null,
     adsetBudgetType: 'Daily', adsetBudgetValue: null,
     startDate: '', setEndDate: false, endDate: '',
-    targetGender: 'All', targetAge: '18-65+', locationType: 'Flexible',
-    location: '', placements: 'Automatic', placementOptions: { ...defaultPlacements },
+    targetGender: 'All', targetAge: '18-65+',
+    location: '', excludedLocation: '',
+    detailedTargeting: '',
+    placements: 'Automatic', placementOptions: { ...defaultPlacements },
     attributionSetting: '7d_click_1d_view', promotedObjectType: 'PIXEL',
-    pixelId: '', customAudiences: '', excludedAudiences: '',
+    pixelId: '',
   };
 }
 
@@ -152,15 +154,14 @@ function mapAdsetFromDb(row: Record<string, unknown>): AdsetTemplate {
     endDate: row.endDate as string,
     targetGender: row.targetGender as string,
     targetAge: row.targetAge as string,
-    locationType: row.locationType as string,
     location: row.location as string,
+    excludedLocation: (row.excludedLocation as string) || '',
+    detailedTargeting: (row.detailedTargeting as string) || '',
     placements: row.placements as string,
     placementOptions: (row.placementOptions as PlacementOptions) || { ...defaultPlacements },
     attributionSetting: row.attributionSetting as string,
     promotedObjectType: row.promotedObjectType as string,
     pixelId: row.pixelId as string,
-    customAudiences: row.customAudiences as string,
-    excludedAudiences: row.excludedAudiences as string,
     createdAt: row.createdAt as string,
   };
 }
@@ -182,15 +183,14 @@ function mapAdsetToDb(t: Partial<AdsetTemplate>) {
   if (t.endDate !== undefined) m.endDate = t.endDate;
   if (t.targetGender !== undefined) m.targetGender = t.targetGender;
   if (t.targetAge !== undefined) m.targetAge = t.targetAge;
-  if (t.locationType !== undefined) m.locationType = t.locationType;
   if (t.location !== undefined) m.location = t.location;
+  if (t.excludedLocation !== undefined) m.excludedLocation = t.excludedLocation;
+  if (t.detailedTargeting !== undefined) m.detailedTargeting = t.detailedTargeting;
   if (t.placements !== undefined) m.placements = t.placements;
   if (t.placementOptions !== undefined) m.placementOptions = t.placementOptions;
   if (t.attributionSetting !== undefined) m.attributionSetting = t.attributionSetting;
   if (t.promotedObjectType !== undefined) m.promotedObjectType = t.promotedObjectType;
   if (t.pixelId !== undefined) m.pixelId = t.pixelId;
-  if (t.customAudiences !== undefined) m.customAudiences = t.customAudiences;
-  if (t.excludedAudiences !== undefined) m.excludedAudiences = t.excludedAudiences;
   return m;
 }
 

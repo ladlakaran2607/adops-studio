@@ -1,3 +1,20 @@
+export type DetailedTargetingType =
+  | 'interests'
+  | 'behaviors'
+  | 'life_events'
+  | 'industries'
+  | 'income'
+  | 'family_statuses';
+
+export interface DetailedTargetingEntry {
+  id: string;                              // Meta targeting ID (numeric, but kept as string)
+  name: string;                            // Display name (e.g. "Online shopping")
+  type: DetailedTargetingType;             // Which of the three buckets
+  path?: string[];                         // Breadcrumb from Meta (e.g. ["Interests", "Shopping"])
+  audience_size_lower_bound?: number;
+  audience_size_upper_bound?: number;
+}
+
 export interface GeoLocationEntry {
   key: string;                           // Meta geo key (e.g., "2506137" for city, "NL" for country)
   name: string;                          // Display name
@@ -45,15 +62,14 @@ export interface AdsetTemplate {
   endDate: string;
   targetGender: string;
   targetAge: string;
-  locationType: string;
   location: string;
+  excludedLocation: string;
+  detailedTargeting: string;
   placements: string;
   placementOptions: PlacementOptions;
   attributionSetting: string;
   promotedObjectType: string;
   pixelId: string;
-  customAudiences: string;
-  excludedAudiences: string;
   createdAt: string;
 }
 

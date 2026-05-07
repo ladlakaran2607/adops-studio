@@ -18,6 +18,7 @@ import type { CampaignTemplate, AdsetTemplate, AdTemplate, AdvantageCreativeTemp
 import { cn } from '@/lib/utils';
 import { CreativeSection, createEmptyCreativeData, type CreativeData } from '@/components/builder/CreativeSection';
 import { DocumentImport, type ParsedDocument } from '@/components/builder/DocumentImport';
+import { CustomAudiencePicker } from '@/components/builder/CustomAudiencePicker';
 import { AITemplateRecommender } from '@/components/builder/AITemplateRecommender';
 import { launchCampaign, type LaunchResult, type LaunchProgress } from '@/lib/campaignService';
 import { useAuth } from '@/contexts/AuthContext';
@@ -180,6 +181,8 @@ interface AdSetEntry {
   type: 'new' | 'existing';
   existingAdsetId: string;
   adsetTemplateId: string;
+  customAudiences: { id: string; name: string }[];
+  excludedAudiences: { id: string; name: string }[];
   ads: AdEntry[];
   collapsed: boolean;
 }
@@ -234,6 +237,8 @@ function createAdSet(index: number): AdSetEntry {
     type: 'new',
     existingAdsetId: '',
     adsetTemplateId: '',
+    customAudiences: [],
+    excludedAudiences: [],
     ads: [createAd(1)],
     collapsed: false,
   };
@@ -551,6 +556,8 @@ export default function CampaignBuilder() {
       type: 'new' as const,
       existingAdsetId: '',
       adsetTemplateId: '',
+      customAudiences: [],
+      excludedAudiences: [],
       collapsed: false,
       ads: camp.ads.map((ad) => ({
         id: crypto.randomUUID(),
@@ -793,6 +800,10 @@ export default function CampaignBuilder() {
             targetGender: adsetTemplate.targetGender,
             targetAge: adsetTemplate.targetAge,
             location: adsetTemplate.location,
+            excludedLocation: adsetTemplate.excludedLocation,
+            detailedTargeting: adsetTemplate.detailedTargeting,
+            customAudiences: adSet.customAudiences,
+            excludedAudiences: adSet.excludedAudiences,
             adsetConversionLocation: adsetTemplate.adsetConversionLocation,
             pixelId: adsetTemplate.pixelId || selectedAccount?.pixelId,
             adsetBudgetType: adsetTemplate.adsetBudgetType,
@@ -1183,7 +1194,11 @@ export default function CampaignBuilder() {
             </div>
             {docImportOpen ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
           </div>
-          <div className={`overflow-hidden transition-all duration-300 ${docImportOpen ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0'}`}>
+          <div
+            className={`grid transition-all duration-300 ${docImportOpen ? 'opacity-100' : 'opacity-0'}`}
+            style={{ gridTemplateRows: docImportOpen ? '1fr' : '0fr' }}
+          >
+            <div className="overflow-hidden">
             <CardContent className="pt-0 pb-6">
               <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-5 items-stretch">
                 {/* Left 2/3: Upload zone — stretches to match right side */}
@@ -1208,6 +1223,7 @@ export default function CampaignBuilder() {
                 </div>
               </div>
             </CardContent>
+            </div>
           </div>
         </Card>
 
@@ -1382,7 +1398,11 @@ export default function CampaignBuilder() {
                     </div>
                   </div>
 
-                  <div className={`overflow-hidden transition-all duration-300 ${adSet.collapsed ? 'max-h-0 opacity-0' : 'max-h-[9999px] opacity-100'}`}>
+                  <div
+                    className={`grid transition-all duration-300 ${adSet.collapsed ? 'opacity-0' : 'opacity-100'}`}
+                    style={{ gridTemplateRows: adSet.collapsed ? '0fr' : '1fr' }}
+                  >
+                  <div className="overflow-hidden">
                   <div className="space-y-4">
 
                   <div className={cn("grid gap-4", campaignType === 'existing' ? 'grid-cols-3' : 'grid-cols-2')}>
@@ -1477,6 +1497,25 @@ export default function CampaignBuilder() {
                     </div>
                     )}
                   </div>
+
+                  {adSet.type === 'new' && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+                      <CustomAudiencePicker
+                        accountId={accountId}
+                        value={adSet.customAudiences}
+                        onChange={(v) => updateAdSet(adSet.id, { customAudiences: v })}
+                        label="Custom Audiences"
+                        addButtonLabel="Add Audience"
+                      />
+                      <CustomAudiencePicker
+                        accountId={accountId}
+                        value={adSet.excludedAudiences}
+                        onChange={(v) => updateAdSet(adSet.id, { excludedAudiences: v })}
+                        label="Excluded Audiences"
+                        addButtonLabel="Add Excluded"
+                      />
+                    </div>
+                  )}
 
                   <hr className="border-border" />
 
@@ -1702,6 +1741,7 @@ export default function CampaignBuilder() {
                     <Plus className="w-3.5 h-3.5 mr-1" /> Add New Ad
                   </Button>
 
+                  </div>
                   </div>
                   </div>
                 </CardContent>

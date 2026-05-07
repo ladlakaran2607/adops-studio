@@ -14,6 +14,8 @@ interface LocationPickerProps {
   value: string;
   onChange: (value: string) => void;
   accountId?: string;
+  label?: string;
+  addButtonLabel?: string;
 }
 
 type LocationType = 'city' | 'country' | 'region';
@@ -61,7 +63,13 @@ function typeIcon(type: LocationType) {
   return <Globe className="w-3.5 h-3.5" />;
 }
 
-export function LocationPicker({ value, onChange, accountId }: LocationPickerProps) {
+export function LocationPicker({
+  value,
+  onChange,
+  accountId,
+  label = 'Locations',
+  addButtonLabel = 'Add Location',
+}: LocationPickerProps) {
   const [entries, setEntries] = useState<GeoLocationEntry[]>(() => parseLocations(value));
   const [searchType, setSearchType] = useState<LocationType>('country');
   const [searchQuery, setSearchQuery] = useState('');
@@ -112,7 +120,7 @@ export function LocationPicker({ value, onChange, accountId }: LocationPickerPro
   if (!accountId) {
     return (
       <div>
-        <Label>Location</Label>
+        <Label>{label}</Label>
         <p className="text-sm text-muted-foreground mt-1.5">
           Add an ad account in Settings to enable location search.
         </p>
@@ -123,12 +131,12 @@ export function LocationPicker({ value, onChange, accountId }: LocationPickerPro
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <Label>Locations</Label>
+        <Label>{label}</Label>
         <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
           <PopoverTrigger asChild>
             <Button variant="outline" size="sm" className="gap-1.5">
               <Plus className="w-3.5 h-3.5" />
-              Add Location
+              {addButtonLabel}
             </Button>
           </PopoverTrigger>
           <PopoverContent className="w-[360px] p-0" align="end">

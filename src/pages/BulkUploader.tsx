@@ -241,7 +241,18 @@ export default function BulkUploader() {
         for (const adsetId of adSetIds) {
           let adParams: Record<string, unknown> = {};
           try {
-            const createRes = await metaPost(accountId, `act_${accountId}/adcreatives`, adInfo.payload);
+            // Meta's /adcreatives endpoint intermittently returns a generic
+            // "Something went wrong, try again later" for valid payloads under
+            // load. One retry with a short delay converts those into successes
+            // without any user-visible churn.
+            let createRes: Record<string, unknown>;
+            try {
+              createRes = await metaPost(accountId, `act_${accountId}/adcreatives`, adInfo.payload);
+            } catch (firstErr) {
+              console.warn(`[Bulk Duplicate] adcreatives mint failed for ad ${adId} → adset ${adsetId}, retrying once:`, (firstErr as Error).message);
+              await new Promise(r => setTimeout(r, 1000));
+              createRes = await metaPost(accountId, `act_${accountId}/adcreatives`, adInfo.payload);
+            }
             const newCreativeId = (createRes as { id?: string }).id;
             if (!newCreativeId) throw new Error('Meta did not return a creative id');
 

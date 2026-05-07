@@ -88,38 +88,115 @@ function parseLocations(locationStr: string): GeoLocationEntry[] {
   return entries;
 }
 
+// ── Detailed targeting helpers ──
+type DetailedTargetingType =
+  | 'interests' | 'behaviors'
+  | 'life_events' | 'industries' | 'income' | 'family_statuses';
+
+const VALID_DT_TYPES: ReadonlySet<string> = new Set([
+  'interests', 'behaviors', 'life_events', 'industries', 'income', 'family_statuses',
+]);
+
+type DetailedTargetingItem = { id: string; name: string; type: DetailedTargetingType };
+
+function parseDetailedTargeting(raw?: string): DetailedTargetingItem[] {
+  if (!raw?.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const out: DetailedTargetingItem[] = [];
+    for (const e of parsed) {
+      if (!e || typeof e.id !== 'string' || typeof e.name !== 'string') continue;
+      if (!VALID_DT_TYPES.has(e.type)) {
+        // Unknown / stale type (e.g. legacy 'demographics' from before the
+        // sub-type split). Drop and log so the user re-picks; emitting it
+        // would cause Meta to silently ignore the targeting.
+        console.warn('[detailed-targeting] dropping stale entry', e);
+        continue;
+      }
+      out.push({ id: e.id, name: e.name, type: e.type });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Groups detailed targeting items by their real Meta key, e.g.
+ *   { interests: [...], life_events: [...], industries: [...] }
+ *
+ * Each key is a valid field inside `flexible_spec[0]` or `exclusions`.
+ */
+function groupDetailedTargeting(items: DetailedTargetingItem[]): Record<string, Array<{ id: string; name: string }>> | null {
+  if (items.length === 0) return null;
+  const grouped: Record<string, Array<{ id: string; name: string }>> = {};
+  for (const item of items) {
+    if (!grouped[item.type]) grouped[item.type] = [];
+    grouped[item.type].push({ id: item.id, name: item.name });
+  }
+  return grouped;
+}
+
 // ── Targeting ──
 function buildTargetingSpec(
   placements: string,
   placementOptions: Record<string, boolean> | null,
-  opts: { targetGender?: string; targetAge?: string; location?: string }
+  opts: {
+    targetGender?: string;
+    targetAge?: string;
+    location?: string;
+    excludedLocation?: string;
+    detailedTargeting?: string;
+    customAudiences?: Array<{ id: string; name?: string }>;
+    excludedAudiences?: Array<{ id: string; name?: string }>;
+  }
 ): Record<string, unknown> {
   const targeting: Record<string, unknown> = {};
 
-  // Location: cities, countries, regions
-  const entries = parseLocations(opts.location || '');
-  if (entries.length > 0) {
+  // We omit `location_types` entirely so Meta uses its default ("home, recent"
+  // = Flexible). Sending it explicitly was the historical fix for a per-
+  // template "Location Type" dropdown, but that was removed and the explicit
+  // value seems to be a trigger for unrelated validation errors.
+  const buildGeoBlock = (raw?: string): Record<string, unknown> | null => {
+    const entries = parseLocations(raw || '');
+    if (entries.length === 0) return null;
+    const block: Record<string, unknown> = {};
     const cities = entries.filter(e => e.type === 'city');
     const countries = entries.filter(e => e.type === 'country');
     const regions = entries.filter(e => e.type === 'region');
-
-    const geoLocations: Record<string, unknown> = {};
     if (cities.length) {
-      geoLocations.cities = cities.map(c => ({
+      block.cities = cities.map(c => ({
         key: c.key,
         radius: c.radius || 25,
         distance_unit: c.distance_unit || 'kilometer',
       }));
     }
-    if (countries.length) {
-      geoLocations.countries = countries.map(c => c.key);
-    }
-    if (regions.length) {
-      geoLocations.regions = regions.map(r => ({ key: r.key }));
-    }
-    if (Object.keys(geoLocations).length > 0) {
-      targeting.geo_locations = geoLocations;
-    }
+    if (countries.length) block.countries = countries.map(c => c.key);
+    if (regions.length) block.regions = regions.map(r => ({ key: r.key }));
+    return block;
+  };
+
+  const geoLocations = buildGeoBlock(opts.location);
+  if (geoLocations) targeting.geo_locations = geoLocations;
+
+  const excludedGeoLocations = buildGeoBlock(opts.excludedLocation);
+  if (excludedGeoLocations) targeting.excluded_geo_locations = excludedGeoLocations;
+
+  // Detailed targeting (include only). Items in one flexible_spec entry are
+  // OR'd together. Exclusions for interests/behaviors/demographics were
+  // deprecated by Meta in 2023; use custom audience exclusions instead.
+  const includeGroup = groupDetailedTargeting(parseDetailedTargeting(opts.detailedTargeting));
+  if (includeGroup) targeting.flexible_spec = [includeGroup];
+
+  // Custom audiences (per-account, picked in Campaign Builder).
+  // Meta accepts { id } or { id, name } — we send name for human-readable
+  // logs in meta-proxy + ErrorLogs context.
+  if (opts.customAudiences && opts.customAudiences.length > 0) {
+    targeting.custom_audiences = opts.customAudiences.map(a => ({ id: a.id, name: a.name }));
+  }
+  if (opts.excludedAudiences && opts.excludedAudiences.length > 0) {
+    targeting.excluded_custom_audiences = opts.excludedAudiences.map(a => ({ id: a.id, name: a.name }));
   }
 
   if (opts.targetAge) {
@@ -1159,7 +1236,15 @@ export async function launchCampaign(
       const targeting = buildTargetingSpec(
         tf.placements || 'Automatic',
         tf.placementOptions || tf.placement_options || null,
-        { targetGender: tf.targetGender || tf.target_gender, targetAge: tf.targetAge || tf.target_age, location: tf.location }
+        {
+          targetGender: tf.targetGender || tf.target_gender,
+          targetAge: tf.targetAge || tf.target_age,
+          location: tf.location,
+          excludedLocation: tf.excludedLocation || tf.excluded_location,
+          detailedTargeting: tf.detailedTargeting || tf.detailed_targeting,
+          customAudiences: tf.customAudiences || tf.custom_audiences,
+          excludedAudiences: tf.excludedAudiences || tf.excluded_audiences,
+        }
       );
 
       const adsetParams: Record<string, unknown> = {
@@ -1350,16 +1435,52 @@ export async function launchCampaign(
           creativeSpec = buildSimpleImageCreative(adInput, ctx);
         }
 
-        // Advantage+ creative — inject degrees_of_freedom_spec into every
-        // creative shape (simple + asset_feed). Individual builders used to
-        // handle this but only the asset_feed builders did; centralising here
-        // guarantees the DOF spec is always present when the user picked a
-        // template, regardless of creative shape.
-        if (adInput.advantage_creative_config) {
-          creativeSpec.degrees_of_freedom_spec = {
-            creative_features_spec: adInput.advantage_creative_config,
-          };
-        }
+        // Degrees-of-freedom spec — always sent. Meta requires the post-
+        // deprecation anchor features (`advantage_plus_creative` and
+        // `standard_enhancements`) on every creative; without them, Meta
+        // rejects with the misleading "standard enhancements deprecated"
+        // error regardless of what other features are listed.
+        //
+        // Reverse-engineered from a working ad created via Ads Manager UI.
+        // We inject the anchors first, then the user-picked features (or
+        // OPT_OUT defaults if no template). User-picked values for the same
+        // key win — e.g. if the user opted IN to image_touchups, that
+        // overrides our default OPT_OUT.
+        const anchorFeatures: Record<string, unknown> = {
+          advantage_plus_creative: { enroll_status: 'OPT_OUT' },
+          standard_enhancements:   { enroll_status: 'OPT_OUT' },
+          // pac_* features govern placement asset customization. Required for
+          // asset_feed_spec + asset_customization_rules to render variants per
+          // placement. Harmless on simple creatives.
+          pac_relaxation: { enroll_status: 'OPT_IN' },
+          pac_recomposition: {
+            enroll_status: 'OPT_IN',
+            customizations: {
+              recomposition_type: { vertical: 'smart_crop', horizontal: 'smart_crop' },
+            },
+          },
+        };
+        const defaultOptOut: Record<string, { enroll_status: string }> = {
+          cv_transformation:             { enroll_status: 'OPT_OUT' },
+          image_touchups:                { enroll_status: 'OPT_OUT' },
+          image_brightness_and_contrast: { enroll_status: 'OPT_OUT' },
+          image_templates:               { enroll_status: 'OPT_OUT' },
+          image_animation:               { enroll_status: 'OPT_OUT' },
+          image_uncrop:                  { enroll_status: 'OPT_OUT' },
+          text_optimizations:            { enroll_status: 'OPT_OUT' },
+          text_translation:              { enroll_status: 'OPT_OUT' },
+          enhance_cta:                   { enroll_status: 'OPT_OUT' },
+          site_extensions:               { enroll_status: 'OPT_OUT' },
+          inline_comment:                { enroll_status: 'OPT_OUT' },
+          product_extensions:            { enroll_status: 'OPT_OUT' },
+        };
+        creativeSpec.degrees_of_freedom_spec = {
+          creative_features_spec: {
+            ...defaultOptOut,
+            ...(adInput.advantage_creative_config || {}),
+            ...anchorFeatures,
+          },
+        };
 
         // Product extensions (sidecar "Show Products") — when the user
         // picks a product set for an ad, keep the original creative intact
