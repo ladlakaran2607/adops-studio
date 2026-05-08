@@ -126,7 +126,63 @@ function buildSquare1080AiFillUrl(cloudinaryUrl: string): string {
 const CLOUDINARY_CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
 const cloudinaryConfigured = Boolean(CLOUDINARY_CLOUD_NAME);
 
+/**
+ * If `file` is an image larger than `thresholdBytes`, downscale it client-side
+ * to fit within `maxDimension` on the long side and re-encode as JPEG. Returns
+ * the original File untouched when no compression is needed (small files,
+ * non-image MIME types, or compression failures).
+ *
+ * Why: Cloudinary's signed upload endpoint rejects files over 20 MB with a
+ * 400. Designer exports routinely exceed this; rather than make the user
+ * re-export, we shrink in the browser. Output dimensions (default 2400 px on
+ * the long side) are still well above any Meta placement (max 1080×1920),
+ * so visible quality is unchanged after Meta's own downscale.
+ */
+async function compressIfLarge(
+  file: File,
+  thresholdBytes = 19 * 1024 * 1024,
+  maxDimension = 2400,
+  quality = 0.9,
+): Promise<File> {
+  if (!file.type.startsWith('image/')) return file;
+  if (file.size <= thresholdBytes) return file;
+
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return file;
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close?.();
+
+    const blob: Blob | null = await new Promise(resolve =>
+      canvas.toBlob(b => resolve(b), 'image/jpeg', quality)
+    );
+    if (!blob) return file;
+
+    const newName = file.name.replace(/\.[^.]+$/, '') + '.jpg';
+    const compressed = new File([blob], newName, { type: 'image/jpeg', lastModified: Date.now() });
+    console.log(
+      `[Compress] ${file.name}: ${(file.size / 1024 / 1024).toFixed(1)} MB → ${(compressed.size / 1024 / 1024).toFixed(1)} MB`
+    );
+    return compressed;
+  } catch (err) {
+    console.warn('[Compress] failed, uploading original:', err);
+    return file;
+  }
+}
+
 async function uploadToCloudinary(file: File, resourceType: 'image' | 'video' = 'image'): Promise<string> {
+  // Pre-shrink oversized images so they fit Cloudinary's 20 MB upload cap.
+  // No-op for small images and for videos.
+  const uploadFile = resourceType === 'image' ? await compressIfLarge(file) : file;
+
   // Step 1: Get signature from server (API secret never touches the browser)
   const { signature, timestamp, api_key } = await invokeEdgeFunction<{
     signature: string;
@@ -136,7 +192,7 @@ async function uploadToCloudinary(file: File, resourceType: 'image' | 'video' = 
 
   // Step 2: Upload to Cloudinary with signed params
   const formData = new FormData();
-  formData.append('file', file);
+  formData.append('file', uploadFile);
   formData.append('api_key', api_key);
   formData.append('timestamp', String(timestamp));
   formData.append('signature', signature);
@@ -153,6 +209,38 @@ async function uploadToCloudinary(file: File, resourceType: 'image' | 'video' = 
 
   const data = await res.json();
   return data.secure_url;
+}
+
+/**
+ * Run an async function across an array of items with a concurrency cap.
+ * Behaves like Promise.allSettled — never throws, returns one
+ * PromiseSettledResult per input item in input order — but never has more
+ * than `concurrency` operations in flight at a time.
+ *
+ * Used to throttle Cloudinary signed uploads: the endpoint rate-limits
+ * concurrent uploads per API key, so firing 9+ files in parallel returns
+ * 400s on the latter half. Capping at 3 keeps every upload under the limit
+ * and makes bulk uploads of large carousels reliable.
+ */
+async function withLimit<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      try {
+        results[i] = { status: 'fulfilled', value: await fn(items[i]) };
+      } catch (err) {
+        results[i] = { status: 'rejected', reason: err };
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: concurrency }, worker));
+  return results;
 }
 
 interface ImageUploadBlockProps {
@@ -921,9 +1009,10 @@ export function CreativeSection({ data, onChange }: CreativeSectionProps) {
       setIsBulkUploading(true);
       toast.success(`Uploading ${files.length} image(s) to Cloudinary...`);
       try {
-        const results = await Promise.allSettled(
-          files.map(file => uploadToCloudinary(file))
-        );
+        // Cap at 3 concurrent uploads. Cloudinary's signed-upload endpoint
+        // rate-limits per API key; firing 9+ in parallel reliably 400s on
+        // the latter half. Same total throughput, zero failures.
+        const results = await withLimit(files, 3, file => uploadToCloudinary(file));
 
         const newCards: CarouselCard[] = [];
         let failCount = 0;
