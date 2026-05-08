@@ -1435,20 +1435,22 @@ export async function launchCampaign(
           creativeSpec = buildSimpleImageCreative(adInput, ctx);
         }
 
-        // Degrees-of-freedom spec — always sent. Meta requires the post-
-        // deprecation anchor features (`advantage_plus_creative` and
-        // `standard_enhancements`) on every creative; without them, Meta
-        // rejects with the misleading "standard enhancements deprecated"
-        // error regardless of what other features are listed.
+        // Degrees-of-freedom spec — always sent. Anchor features migrate the
+        // creative away from the deprecated standard_enhancements umbrella.
         //
-        // Reverse-engineered from a working ad created via Ads Manager UI.
-        // We inject the anchors first, then the user-picked features (or
+        // IMPORTANT: do NOT include `standard_enhancements` (even at OPT_OUT)
+        // in the request body. Meta rejects creatives that include the field
+        // with subcode 3858504 ("Including standard enhancements field in
+        // creative has been deprecated"). The field reappears on the stored
+        // creative after Meta processes it — that's a server-side artefact,
+        // not something we can echo back on a write.
+        //
+        // We inject defaults first, then the user-picked features (or just
         // OPT_OUT defaults if no template). User-picked values for the same
         // key win — e.g. if the user opted IN to image_touchups, that
-        // overrides our default OPT_OUT.
+        // overrides our default OPT_OUT. Anchors come last and always win.
         const anchorFeatures: Record<string, unknown> = {
           advantage_plus_creative: { enroll_status: 'OPT_OUT' },
-          standard_enhancements:   { enroll_status: 'OPT_OUT' },
           // pac_* features govern placement asset customization. Required for
           // asset_feed_spec + asset_customization_rules to render variants per
           // placement. Harmless on simple creatives.
