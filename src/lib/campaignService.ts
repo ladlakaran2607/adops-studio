@@ -1435,54 +1435,17 @@ export async function launchCampaign(
           creativeSpec = buildSimpleImageCreative(adInput, ctx);
         }
 
-        // Degrees-of-freedom spec — always sent. Anchor features migrate the
-        // creative away from the deprecated standard_enhancements umbrella.
-        //
-        // IMPORTANT: do NOT include `standard_enhancements` (even at OPT_OUT)
-        // in the request body. Meta rejects creatives that include the field
-        // with subcode 3858504 ("Including standard enhancements field in
-        // creative has been deprecated"). The field reappears on the stored
-        // creative after Meta processes it — that's a server-side artefact,
-        // not something we can echo back on a write.
-        //
-        // We inject defaults first, then the user-picked features (or just
-        // OPT_OUT defaults if no template). User-picked values for the same
-        // key win — e.g. if the user opted IN to image_touchups, that
-        // overrides our default OPT_OUT. Anchors come last and always win.
-        const anchorFeatures: Record<string, unknown> = {
-          advantage_plus_creative: { enroll_status: 'OPT_OUT' },
-          // pac_* features govern placement asset customization. Required for
-          // asset_feed_spec + asset_customization_rules to render variants per
-          // placement. Harmless on simple creatives.
-          pac_relaxation: { enroll_status: 'OPT_IN' },
-          pac_recomposition: {
-            enroll_status: 'OPT_IN',
-            customizations: {
-              recomposition_type: { vertical: 'smart_crop', horizontal: 'smart_crop' },
-            },
-          },
-        };
-        const defaultOptOut: Record<string, { enroll_status: string }> = {
-          cv_transformation:             { enroll_status: 'OPT_OUT' },
-          image_touchups:                { enroll_status: 'OPT_OUT' },
-          image_brightness_and_contrast: { enroll_status: 'OPT_OUT' },
-          image_templates:               { enroll_status: 'OPT_OUT' },
-          image_animation:               { enroll_status: 'OPT_OUT' },
-          image_uncrop:                  { enroll_status: 'OPT_OUT' },
-          text_optimizations:            { enroll_status: 'OPT_OUT' },
-          text_translation:              { enroll_status: 'OPT_OUT' },
-          enhance_cta:                   { enroll_status: 'OPT_OUT' },
-          site_extensions:               { enroll_status: 'OPT_OUT' },
-          inline_comment:                { enroll_status: 'OPT_OUT' },
-          product_extensions:            { enroll_status: 'OPT_OUT' },
-        };
-        creativeSpec.degrees_of_freedom_spec = {
-          creative_features_spec: {
-            ...defaultOptOut,
-            ...(adInput.advantage_creative_config || {}),
-            ...anchorFeatures,
-          },
-        };
+        // Degrees-of-freedom spec — only sent when the user has explicitly
+        // picked an Advantage+ Creative template. Otherwise we omit the field
+        // entirely and let Meta apply its server-side defaults; this matches
+        // the original behaviour and avoids the standard_enhancements
+        // deprecation error (subcode 3858504), which fires whenever the field
+        // is *included* in a request, regardless of OPT_IN/OPT_OUT.
+        if (adInput.advantage_creative_config) {
+          creativeSpec.degrees_of_freedom_spec = {
+            creative_features_spec: adInput.advantage_creative_config,
+          };
+        }
 
         // Product extensions (sidecar "Show Products") — when the user
         // picks a product set for an ad, keep the original creative intact
